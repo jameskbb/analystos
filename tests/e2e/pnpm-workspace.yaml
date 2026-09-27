@@ -1,0 +1,2 @@
+# Standalone pnpm project (not part of the apps/web workspace).
+packages: []

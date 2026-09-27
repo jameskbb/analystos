@@ -1,0 +1,41 @@
+[project]
+name = "analystos-api"
+version = "0.1.0"
+description = "AnalystOS REST API: FastAPI, SQLAlchemy 2, Alembic, auth, workspace-scoped resources, exports."
+requires-python = ">=3.12"
+dependencies = [
+  "analystos-engine",
+  "analystos-investigator",
+  "analystos-demo",
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.30",
+  "sqlalchemy>=2.0",
+  "alembic>=1.13",
+  "pydantic-settings>=2.4",
+  "argon2-cffi>=23",
+  "cryptography>=43",
+  "structlog>=24",
+  "python-multipart>=0.0.9",
+  "openpyxl>=3.1",
+  "pyyaml>=6",
+]
+
+[project.optional-dependencies]
+pdf = ["weasyprint>=62"]
+postgres = ["psycopg[binary]>=3.2"]
+
+[project.scripts]
+analystos-api = "analystos_api.main:run"
+analystos-api-migrate = "analystos_api.migrate:cli"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/analystos_api"]
+
+[tool.uv.sources]
+analystos-engine = { workspace = true }
+analystos-investigator = { workspace = true }
+analystos-demo = { workspace = true }

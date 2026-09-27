@@ -1,0 +1,191 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.12"
+  NODE_VERSION: "24"
+  PNPM_VERSION: "12.4.1"
+  UV_VERSION: "0.8.x"
+
+jobs:
+  python:
+    name: Python (lint, format, types, tests, evals)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - name: Install
+        run: uv sync --all-packages --all-extras --frozen
+      - name: Ruff lint
+        run: uv run ruff check .
+      - name: Ruff format
+        run: uv run ruff format --check .
+      - name: Mypy (gating)
+        # Configuration: [tool.mypy] in pyproject.toml (third-party modules without types are listed there).
+        # All five Python packages are type-clean and gate CI.
+        run: >-
+          uv run mypy packages/engine/src packages/investigator/src packages/demo-data/src
+          apps/api/src apps/mcp/src
+      - name: Cache demo dataset
+        uses: actions/cache@v4
+        with:
+          path: data/demo
+          key: demo-${{ hashFiles('packages/demo-data/src/analystos_demo/*.py') }}
+      - name: Pytest (engine, investigator, demo, API, MCP, evals)
+        env:
+          AOS_JOB_EXECUTION: inline
+        run: scripts/test-python.sh -q -ra -p no:cacheprovider
+      - name: Eval scorecard
+        if: always()
+        run: uv run pytest tests/evals/test_investigations.py -q -s -k scorecard || true
+
+  migrations:
+    name: Migrations (SQLite + Postgres)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: analystos
+          POSTGRES_PASSWORD: analystos
+          POSTGRES_DB: analystos
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U analystos -d analystos"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - run: uv sync --all-packages --all-extras --frozen
+      - name: SQLite upgrade, downgrade, upgrade
+        env:
+          DATABASE_URL: sqlite:///./ci-migrations.db
+        run: |
+          uv run alembic -c apps/api/alembic.ini upgrade head
+          uv run alembic -c apps/api/alembic.ini downgrade base
+          uv run alembic -c apps/api/alembic.ini upgrade head
+          uv run alembic -c apps/api/alembic.ini check
+      - name: Postgres upgrade, downgrade, upgrade
+        env:
+          DATABASE_URL: postgresql+psycopg://analystos:analystos@localhost:5432/analystos
+        run: |
+          uv run alembic -c apps/api/alembic.ini upgrade head
+          uv run alembic -c apps/api/alembic.ini downgrade base
+          uv run alembic -c apps/api/alembic.ini upgrade head
+          uv run alembic -c apps/api/alembic.ini check
+      - name: API boots against Postgres
+        env:
+          DATABASE_URL: postgresql+psycopg://analystos:analystos@localhost:5432/analystos
+          DATA_DIR: ${{ runner.temp }}/aos-data
+          AOS_JOB_EXECUTION: inline
+        run: |
+          uv run python - <<'PY'
+          from fastapi.testclient import TestClient
+          from analystos_api.main import create_app
+          with TestClient(create_app()) as client:
+              assert client.get("/api/health").json()["status"] == "ok"
+          print("API healthy on Postgres")
+          PY
+
+  web:
+    name: Web (lint, typecheck, test, build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: apps/web/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test # vitest.config.ts limits workers (jsdom forks are memory-hungry)
+      - name: Cache Next.js build
+        uses: actions/cache@v4
+        with:
+          path: apps/web/.next/cache
+          key: next-${{ hashFiles('apps/web/pnpm-lock.yaml') }}-${{ hashFiles('apps/web/**/*.ts', 'apps/web/**/*.tsx') }}
+          restore-keys: next-${{ hashFiles('apps/web/pnpm-lock.yaml') }}-
+      - run: pnpm build
+
+  e2e:
+    name: E2E (Playwright acceptance flows 1 and 2, production build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    needs: [python, web]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - run: uv sync --all-packages --all-extras --frozen
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: |
+            apps/web/pnpm-lock.yaml
+            tests/e2e/pnpm-lock.yaml
+      - name: Install web and E2E dependencies
+        run: |
+          pnpm --dir apps/web install --frozen-lockfile
+          pnpm --dir tests/e2e install --frozen-lockfile
+      - name: Cache demo dataset
+        uses: actions/cache@v4
+        with:
+          path: data/demo
+          key: demo-${{ hashFiles('packages/demo-data/src/analystos_demo/*.py') }}
+      - name: Install Playwright Chromium
+        run: pnpm --dir tests/e2e exec playwright install --with-deps chromium
+      - name: Run acceptance flows (production `next build`, served by server.mjs behind the /api proxy)
+        timeout-minutes: 30
+        env:
+          E2E_WEB_MODE: build
+          NODE_OPTIONS: --max-old-space-size=4096
+        run: pnpm --dir tests/e2e test
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: |
+            tests/e2e/playwright-report
+            tests/e2e/test-results
+            tests/e2e/.servers/*.log

@@ -1,0 +1,51 @@
+# Data-quality rules shipped with the Summit Supply Co. demo.
+# Several deliberately fail: the raw files are messy on purpose (see scenarios.json -> data_quality_issues).
+# Rules never modify data; failing rows are for inspection only.
+rules:
+  - {name: orders_order_id_unique, table: orders, column: order_id, kind: unique, severity: error,
+     description: Every order header appears once.}
+  - {name: order_lines_id_unique, table: order_lines, column: order_line_id, kind: unique, severity: error,
+     description: Every order line appears once.}
+  - {name: customers_customer_id_unique, table: customers, column: customer_id, kind: unique, severity: error,
+     description: "Customer master has one row per account (fails: exact duplicate rows of inactive accounts)."}
+  - {name: customers_region_not_null, table: customers, column: region, kind: not_null, severity: warning,
+     description: "Billing region is populated (fails: nulls). Reporting uses the branch region instead."}
+  - {name: customers_region_allowed, table: customers, column: region, kind: allowed_values, severity: warning,
+     params: {values: [North Texas, Gulf Coast, Central Texas, West Texas, Oklahoma]},
+     description: "Billing region uses the canonical region names (fails: inconsistent casing)."}
+  - {name: customers_account_opened_iso, table: customers, column: account_opened, kind: regex, severity: warning,
+     params: {pattern: '^\d{4}-\d{2}-\d{2}$'},
+     description: "Account-opened date is an ISO date (fails: US/other formats and impossible dates)."}
+  - {name: order_lines_quantity_positive, table: order_lines, column: quantity, kind: range, severity: warning,
+     params: {min: 1},
+     description: "Sold quantity is positive (fails: returns keyed as negative order lines)."}
+  - {name: order_lines_net_amount_non_negative, table: order_lines, column: net_amount, kind: range, severity: warning,
+     params: {min: 0},
+     description: "Line revenue is not negative (fails with the negative-quantity lines)."}
+  - {name: order_lines_discount_pct_between, table: order_lines, column: discount_pct, kind: between, severity: error,
+     params: {min: 0, max: 1}, description: Discount percentage is a fraction between 0 and 1.}
+  - {name: orders_customer_fk, table: orders, column: customer_id, kind: fk_exists, severity: error,
+     params: {ref_table: customers, ref_column: customer_id}, description: Every order references a known customer.}
+  - {name: order_lines_order_fk, table: order_lines, column: order_id, kind: fk_exists, severity: error,
+     params: {ref_table: orders, ref_column: order_id}, description: Every line belongs to a known order.}
+  - {name: order_lines_product_fk, table: order_lines, column: product_id, kind: fk_exists, severity: error,
+     params: {ref_table: products, ref_column: product_id}, description: Every line references a known product.}
+  - {name: returns_order_fk, table: returns, column: order_id, kind: fk_exists, severity: warning,
+     params: {ref_table: orders, ref_column: order_id},
+     description: "Every return references a known order (fails: whitespace-padded order IDs)."}
+  - {name: returns_order_id_format, table: returns, column: order_id, kind: regex, severity: warning,
+     params: {pattern: '^SO-\d{7}$'}, description: "Return order IDs are well-formed (fails: padding)."}
+  - {name: orders_status_allowed, table: orders, column: status, kind: allowed_values, severity: error,
+     params: {values: [completed, open, cancelled]}, description: Order status is a known value.}
+  - {name: orders_order_date_not_future, table: orders, column: order_date, kind: not_future, severity: warning,
+     description: "Order dates are not in the future (the demo books orders through 2026-09-30, so pre-booked late-September orders fail until that date passes)."}
+  - {name: leads_channel_allowed, table: leads, column: channel, kind: allowed_values, severity: error,
+     params: {values: [Paid Search, Web Form, Referral, Trade Show, Outbound, Partner]},
+     description: Lead channel is a known marketing channel.}
+  - {name: inventory_on_hand_non_negative, table: inventory_snapshots, column: on_hand_units, kind: range,
+     severity: error, params: {min: 0}, description: On-hand units are never negative.}
+  - {name: products_list_price_positive, table: products, column: list_price, kind: range, severity: error,
+     params: {min: 0.01}, description: Every product has a positive list price.}
+  - {name: cancelled_orders_have_cancelled_lines, table: order_lines, column: null, kind: custom_sql, severity: error,
+     params: {sql: "SELECT l.* FROM order_lines l JOIN orders o ON o.order_id = l.order_id WHERE o.status = 'cancelled' AND l.line_status <> 'cancelled'"},
+     description: Lines of cancelled orders carry line_status cancelled (the SQL returns failing rows).}

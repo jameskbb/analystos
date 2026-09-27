@@ -1,0 +1,126 @@
+"""AnalystOS investigation engine.
+
+Deterministic core: ``interpret`` -> ``plan`` -> ``executor.run`` -> tree of findings with
+evidence, plus drill, rerun/diff, commands, templates and executive summaries. The optional
+LLM layer lives in :mod:`analystos_investigator.llm`.
+"""
+
+from . import evidence, templates
+from .anomaly import investigate_anomaly
+from .attribution import additive_contribution, decompose_drivers, ratio_contribution
+from .commands import Command, CommandContext, parse_command
+from .executor import ExecutionResult, execute, run
+from .hypotheses import generate as generate_hypotheses
+from .interpret import apply_choices, build_value_index, interpret
+from .investigation import (
+    InvestigationError,
+    annotate_node,
+    brief_answer,
+    carry_forward_decisions,
+    diff_runs,
+    drill,
+    followups,
+    investigate,
+    node_lineage,
+    rerun,
+    resolve_ambiguity,
+    resolve_premise_period,
+    run_investigation,
+    set_node_status,
+    update_plan,
+)
+from .models import (
+    ENGINE_VERSION,
+    AmbiguousTerm,
+    AnalysisPlan,
+    Artifact,
+    Contribution,
+    ExecutionConfig,
+    FilterSpec,
+    Hypothesis,
+    Interpretation,
+    Investigation,
+    InvestigationDiff,
+    InvestigationRun,
+    InvestigationTree,
+    PeriodCandidate,
+    PlanContext,
+    PlanStep,
+    Premise,
+    Segment,
+    SegmentComparison,
+    Summary,
+    SummaryItem,
+    TreeNode,
+)
+from .planner import PlanningError, add_step, plan, remove_step, set_step_enabled, update_step
+from .summary import FindingInput, executive_summary
+from .templates import TEMPLATES, InvestigationTemplate, choose_template, get_template
+
+__all__ = [
+    "ENGINE_VERSION",
+    "TEMPLATES",
+    "AmbiguousTerm",
+    "AnalysisPlan",
+    "Artifact",
+    "Command",
+    "CommandContext",
+    "Contribution",
+    "ExecutionConfig",
+    "ExecutionResult",
+    "FilterSpec",
+    "FindingInput",
+    "Hypothesis",
+    "Interpretation",
+    "Investigation",
+    "InvestigationDiff",
+    "InvestigationError",
+    "InvestigationRun",
+    "InvestigationTemplate",
+    "InvestigationTree",
+    "PeriodCandidate",
+    "PlanContext",
+    "PlanStep",
+    "PlanningError",
+    "Premise",
+    "Segment",
+    "SegmentComparison",
+    "Summary",
+    "SummaryItem",
+    "TreeNode",
+    "add_step",
+    "additive_contribution",
+    "annotate_node",
+    "apply_choices",
+    "brief_answer",
+    "carry_forward_decisions",
+    "build_value_index",
+    "choose_template",
+    "decompose_drivers",
+    "diff_runs",
+    "drill",
+    "evidence",
+    "execute",
+    "executive_summary",
+    "followups",
+    "generate_hypotheses",
+    "get_template",
+    "interpret",
+    "investigate",
+    "investigate_anomaly",
+    "node_lineage",
+    "parse_command",
+    "plan",
+    "ratio_contribution",
+    "remove_step",
+    "rerun",
+    "resolve_ambiguity",
+    "resolve_premise_period",
+    "run",
+    "run_investigation",
+    "set_node_status",
+    "set_step_enabled",
+    "templates",
+    "update_plan",
+    "update_step",
+]

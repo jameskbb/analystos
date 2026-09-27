@@ -1,0 +1,73 @@
+# AnalystOS self-hosted stack: Postgres (metadata), API (FastAPI + DuckDB workspaces), web (Next.js).
+#   make docker-env        # writes .env with a random AOS_SECRET_KEY and a setup token
+#   docker compose up --build
+# Web: http://localhost:3000   API docs: http://localhost:8000/api/docs
+#
+# Secure by default (docs/security.md):
+#   - AUTH_MODE defaults to "password": every user signs in. The API refuses to start in
+#     production with a no-password mode unless AOS_ALLOW_INSECURE_LOCAL=true.
+#   - AOS_SECRET_KEY is required; compose will not start without it.
+#   - Ports are published on 127.0.0.1 only. To serve other machines, put a TLS reverse proxy in
+#     front, set AOS_PUBLISH_HOST=0.0.0.0, AOS_COOKIE_SECURE=true and AOS_BOOTSTRAP_TOKEN so a
+#     stranger cannot create the first (owner) account.
+name: analystos
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-analystos}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-analystos}
+      POSTGRES_DB: ${POSTGRES_DB:-analystos}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-analystos}:${POSTGRES_PASSWORD:-analystos}@postgres:5432/${POSTGRES_DB:-analystos}
+      DATA_DIR: /data
+      AOS_ENV: production
+      AOS_SECRET_KEY: ${AOS_SECRET_KEY:?set AOS_SECRET_KEY in .env (make docker-env generates one)}
+      AUTH_MODE: ${AUTH_MODE:-password}
+      AOS_ALLOW_INSECURE_LOCAL: ${AOS_ALLOW_INSECURE_LOCAL:-false}
+      AOS_BOOTSTRAP_TOKEN: ${AOS_BOOTSTRAP_TOKEN:-}
+      AOS_PROXY_SECRET: ${AOS_PROXY_SECRET:?set AOS_PROXY_SECRET in .env (make docker-env generates one)}
+      AOS_COOKIE_SECURE: ${AOS_COOKIE_SECURE:-false}
+      AOS_CORS_ORIGINS: '${AOS_CORS_ORIGINS:-["http://localhost:3000"]}'
+      AI_ENABLED: ${AI_ENABLED:-false}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      AOS_LOG_JSON: "true"
+    volumes:
+      - api-data:/data
+    ports:
+      - "${AOS_PUBLISH_HOST:-127.0.0.1}:8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  web:
+    build:
+      context: apps/web
+    environment:
+      API_URL: http://api:8000
+      AOS_PROXY_SECRET: ${AOS_PROXY_SECRET:?set AOS_PROXY_SECRET in .env (make docker-env generates one)}
+    ports:
+      - "${AOS_PUBLISH_HOST:-127.0.0.1}:3000:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  api-data:

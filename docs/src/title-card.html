@@ -1,0 +1,183 @@
+<!doctype html>
+<!--
+  Source for docs/images/readme-title-analystos.png.
+  Render with: node docs/src/render-title-card.mjs (from the repository root)
+
+  Title-card convention: 1200x440, wordmark and description on the left, the
+  subject on the right. Colours are the light-theme tokens in
+  apps/web/app/globals.css and the mark is apps/web/app/icon.svg. Type is Inter
+  and JetBrains Mono because they are the named families in the app's
+  --font-sans and --font-mono stacks.
+
+  Every number in the tree is copied from the investigation tree block in
+  README.md, so the card claims nothing the README does not.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap">
+<style>
+  :root {
+    --bg: #ffffff;
+    --bg-subtle: #f7f7f8;
+    --bg-muted: #f0f0f2;
+    --fg: #18181b;
+    --fg-muted: #52525b;
+    --fg-subtle: #71717a;
+    --border: #e4e4e7;
+    --accent: #2f5fb3;
+    --accent-soft: #eaf0fa;
+    --accent-soft-fg: #22467f;
+    --positive: #1f7a4d;
+    --positive-soft: #e8f4ed;
+    --negative: #b4372f;
+    --evidence-strong: #1f7a4d;
+    --evidence-moderate: #2f5fb3;
+    --code-bg: #fafafa;
+    --shadow-pop: 0 4px 16px rgb(0 0 0 / 0.08), 0 1px 3px rgb(0 0 0 / 0.06);
+    --mono: 'JetBrains Mono', ui-monospace, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 1200px; height: 440px; overflow: hidden; }
+  body {
+    font-family: 'Inter', ui-sans-serif, system-ui, sans-serif;
+    color: var(--fg);
+    background: linear-gradient(90deg, var(--bg) 0%, var(--bg) 42%, var(--bg-subtle) 100%);
+    display: flex; align-items: center;
+  }
+
+  .left { width: 560px; flex: 0 0 auto; padding: 0 28px 0 64px; }
+  .brand { display: flex; align-items: center; gap: 16px; margin-bottom: 26px; }
+  .brand svg { width: 52px; height: 52px; display: block; }
+  .brand .word { font-size: 44px; font-weight: 700; letter-spacing: -0.03em; line-height: 1; }
+  h1 { font-size: 32px; font-weight: 700; line-height: 1.16; letter-spacing: -0.022em; }
+  .sub { margin-top: 18px; font-size: 18px; line-height: 1.4; color: var(--fg-muted); }
+
+  .panel {
+    flex: 1 1 auto; margin-right: 48px;
+    background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+    box-shadow: var(--shadow-pop); overflow: hidden;
+  }
+  .head {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    padding: 14px 18px; border-bottom: 1px solid var(--border);
+  }
+  .q { font-size: 16px; font-weight: 700; letter-spacing: -0.01em; }
+  .period {
+    font-size: 12px; font-weight: 500; color: var(--fg-muted);
+    background: var(--bg-muted); border-radius: 4px; padding: 3px 8px; white-space: nowrap;
+  }
+  .label {
+    padding: 10px 18px 0; font-size: 10.5px; font-weight: 600; letter-spacing: 0.08em;
+    color: var(--fg-subtle); text-transform: uppercase;
+  }
+
+  .tree { padding: 8px 12px 14px; }
+  .node { display: flex; gap: 8px; padding: 7px 8px; border-radius: 4px; border-left: 2px solid transparent; }
+  .node .dot { width: 8px; height: 8px; border-radius: 2px; background: var(--accent); margin-top: 5px; flex: 0 0 auto; }
+  .node.root .dot { background: var(--fg-subtle); }
+  .node .body { flex: 1 1 auto; min-width: 0; }
+  .node .text { font-size: 13.5px; line-height: 1.3; font-weight: 500; }
+  .node.root .text { font-size: 14.5px; font-weight: 600; }
+  .meta { display: flex; align-items: center; gap: 8px; margin-top: 5px; font-size: 11.5px; }
+
+  .children { position: relative; margin-left: 20px; padding-left: 10px; }
+  .children::before {
+    content: ""; position: absolute; left: 0; top: 0; bottom: 14px; width: 1px; background: var(--border);
+  }
+  .children .node { position: relative; }
+  .children .node::before {
+    content: ""; position: absolute; left: -12px; top: 15px; width: 10px; height: 1px; background: var(--border);
+  }
+  .node.sel { background: var(--accent-soft); border-left-color: var(--accent); }
+
+  .badge {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: 11px; font-weight: 500; border-radius: 3px; padding: 2px 6px; white-space: nowrap;
+  }
+  .badge.obs { color: var(--fg-muted); background: var(--bg-muted); }
+  .badge.strong { color: var(--evidence-strong); background: var(--positive-soft); }
+  .badge.expl { color: var(--accent-soft-fg); background: var(--accent-soft); border: 1px solid #d3def2; }
+  .node.sel .badge.expl { background: var(--bg); }
+  .bars { display: inline-flex; align-items: flex-end; gap: 1.5px; height: 9px; }
+  .bars i { display: block; width: 2.5px; background: var(--evidence-strong); border-radius: 0.5px; }
+  .bars i:nth-child(1) { height: 4px; } .bars i:nth-child(2) { height: 6.5px; } .bars i:nth-child(3) { height: 9px; }
+
+  .track { width: 64px; height: 4px; border-radius: 2px; background: var(--bg-muted); overflow: hidden; }
+  .track b { display: block; height: 100%; background: var(--accent); border-radius: 2px; }
+  .pct { color: var(--fg-muted); font-variant-numeric: tabular-nums; min-width: 26px; }
+  .sql {
+    margin-left: auto; font-family: var(--mono); font-size: 10.5px; font-weight: 500; color: var(--fg-subtle);
+    background: var(--code-bg); border: 1px solid var(--border); border-radius: 3px; padding: 1px 5px;
+  }
+</style>
+</head>
+<body>
+  <div class="left">
+    <div class="brand">
+      <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="0.5" y="0.5" width="15" height="15" rx="3" fill="#18181b"/><path d="M4 4.5h3M5.5 4.5v7M5.5 8h4M5.5 11.5h6" stroke="#fff" stroke-width="1.4" stroke-linecap="round" fill="none"/></svg>
+      <div class="word">AnalystOS</div>
+    </div>
+    <h1>An analytical investigation workspace for BI, data, operations and finance teams.</h1>
+    <p class="sub">Every number links back to the query that produced it.</p>
+  </div>
+
+  <div class="panel">
+    <div class="head">
+      <div class="q">Why was August revenue down?</div>
+      <div class="period">August 2026 vs July 2026</div>
+    </div>
+    <div class="label">Investigation tree</div>
+    <div class="tree">
+      <div class="node root">
+        <span class="dot"></span>
+        <div class="body">
+          <div class="text">Revenue declined 11.8% ($11.37M to $10.02M)</div>
+          <div class="meta">
+            <span class="badge obs">Observation</span>
+            <span class="badge strong"><span class="bars"><i></i><i></i><i></i></span>Strong evidence</span>
+            <span class="sql">SQL</span>
+          </div>
+        </div>
+      </div>
+      <div class="children">
+        <div class="node">
+          <span class="dot"></span>
+          <div class="body">
+            <div class="text">Orders declined 6.7%: explains 55% of the change</div>
+            <div class="meta">
+              <span class="track"><b style="width:55%"></b></span><span class="pct">55%</span>
+              <span class="badge expl">Supported explanation</span>
+              <span class="sql">SQL</span>
+            </div>
+          </div>
+        </div>
+        <div class="node">
+          <span class="dot"></span>
+          <div class="body">
+            <div class="text">AOV declined 5.5%: explains 45% of the change</div>
+            <div class="meta">
+              <span class="track"><b style="width:45%"></b></span><span class="pct">45%</span>
+              <span class="badge expl">Supported explanation</span>
+              <span class="sql">SQL</span>
+            </div>
+          </div>
+        </div>
+        <div class="node sel">
+          <span class="dot"></span>
+          <div class="body">
+            <div class="text">Branch = Dallas: Revenue -$662.0k (-26.7%), 49% of the change</div>
+            <div class="meta">
+              <span class="track"><b style="width:49%"></b></span><span class="pct">49%</span>
+              <span class="badge expl">Supported explanation</span>
+              <span class="sql">SQL</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

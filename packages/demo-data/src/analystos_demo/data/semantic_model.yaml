@@ -1,0 +1,820 @@
+# Summit Supply Co. semantic model (AnalystOS demo).
+# Validated against analystos_engine.semantic.models.SemanticModel in packages/demo-data/tests.
+name: Summit Supply Co.
+version: 1
+calendar:
+  fiscal_year_start_month: 1
+  week_start: monday
+  fiscal_year_naming: end_year
+
+entities:
+  - name: order_lines
+    table: order_lines
+    primary_key: order_line_id
+    label: Order Lines
+    grain_description: One row per product line on a sales order (includes lines of cancelled orders).
+    default_time_dimension: order_date
+  - name: orders
+    table: orders
+    primary_key: order_id
+    label: Orders
+    grain_description: One row per sales order header.
+    default_time_dimension: order_date
+  - name: customers
+    table: customers
+    primary_key: customer_id
+    label: Customers
+    grain_description: One row per customer account (raw file contains a few exact duplicate rows of inactive accounts).
+  - name: products
+    table: products
+    primary_key: product_id
+    label: Products
+    grain_description: One row per product (SKU).
+  - name: regions
+    table: regions
+    primary_key: region
+    label: Regions
+    grain_description: One row per sales region (conformed dimension for actuals, leads, budgets and forecast).
+  - name: customer_segments
+    table: customer_segments
+    primary_key: segment
+    label: Customer Segments
+    grain_description: One row per customer segment (conformed dimension for actuals, leads and forecast).
+  - name: branches
+    table: branches
+    primary_key: branch_id
+    label: Branches
+    grain_description: One row per branch location.
+  - name: sales_reps
+    table: sales_reps
+    primary_key: rep_id
+    label: Sales Reps
+    grain_description: One row per sales rep.
+  - name: returns
+    table: returns
+    primary_key: return_id
+    label: Returns
+    grain_description: One row per returned order line (RMA).
+    default_time_dimension: return_date
+  - name: inventory_snapshots
+    table: inventory_snapshots
+    primary_key: [snapshot_date, branch_id, product_id]
+    label: Inventory Snapshots
+    grain_description: Month-end on-hand position per branch and product. Semi-additive over time.
+    default_time_dimension: snapshot_date
+  - name: leads
+    table: leads
+    primary_key: lead_id
+    label: Leads
+    grain_description: One row per inbound or outbound lead, dated by creation.
+    default_time_dimension: lead_created_date
+  - name: opportunities
+    table: opportunities
+    primary_key: opportunity_id
+    label: Opportunities
+    grain_description: One row per sales opportunity created from a lead.
+    default_time_dimension: opportunity_created_date
+  - name: revenue_forecast
+    table: revenue_forecast
+    primary_key: [forecast_month, region, segment]
+    label: Revenue Forecast
+    grain_description: FY26 plan forecast per month, region and customer segment.
+    default_time_dimension: forecast_month
+  - name: budgets_branch
+    table: budgets_branch
+    primary_key: [branch_id, budget_month]
+    label: Branch Budget
+    grain_description: Budget per branch and month (from budgets.xlsx, sheet Branch Budget).
+    default_time_dimension: budget_month
+  - name: budgets_category
+    table: budgets_category
+    primary_key: [category, budget_month]
+    label: Category Budget
+    grain_description: Budget per product category and month (from budgets.xlsx, sheet Category Budget).
+    default_time_dimension: category_budget_month
+  - name: targets
+    table: targets
+    primary_key: [target_month, rep_id]
+    label: Sales Targets
+    grain_description: Monthly revenue target per sales rep.
+    default_time_dimension: target_month
+  - name: operating_expenses
+    table: operating_expenses
+    primary_key: [expense_month, branch_id]
+    label: Operating Expenses
+    grain_description: Actual operating expenses per branch and month.
+    default_time_dimension: expense_month
+  - name: product_costs
+    table: product_costs
+    primary_key: [product_id, cost_month]
+    label: Product Costs
+    grain_description: Standard unit cost per product and month.
+    default_time_dimension: cost_month
+
+relationships:
+  - {from_entity: branches, from_col: region, to_entity: regions, to_col: region, cardinality: many_to_one, approved: true}
+  - {from_entity: customers, from_col: segment, to_entity: customer_segments, to_col: segment, cardinality: many_to_one, approved: true}
+  - {from_entity: revenue_forecast, from_col: region, to_entity: regions, to_col: region, cardinality: many_to_one, approved: true}
+  - {from_entity: revenue_forecast, from_col: segment, to_entity: customer_segments, to_col: segment, cardinality: many_to_one, approved: true}
+  - {from_entity: leads, from_col: segment, to_entity: customer_segments, to_col: segment, cardinality: many_to_one, approved: true}
+  - {from_entity: order_lines, from_col: order_id, to_entity: orders, to_col: order_id, cardinality: many_to_one, approved: true}
+  - {from_entity: order_lines, from_col: product_id, to_entity: products, to_col: product_id, cardinality: many_to_one, approved: true}
+  - {from_entity: orders, from_col: customer_id, to_entity: customers, to_col: customer_id, cardinality: many_to_one, approved: true,
+     notes: "customers.csv has 8 exact duplicate rows, all inactive accounts without orders; observed fan-out is 1.0"}
+  - {from_entity: orders, from_col: branch_id, to_entity: branches, to_col: branch_id, cardinality: many_to_one, approved: true,
+     notes: "Fulfilling branch. This is the branch used for regional reporting."}
+  - {from_entity: orders, from_col: sales_rep_id, to_entity: sales_reps, to_col: rep_id, cardinality: many_to_one, approved: true}
+  - {from_entity: customers, from_col: home_branch_id, to_entity: branches, to_col: branch_id, cardinality: many_to_one, approved: false,
+     notes: "Home branch can differ from the fulfilling branch; not approved so revenue is never regionalised through it."}
+  - {from_entity: sales_reps, from_col: branch_id, to_entity: branches, to_col: branch_id, cardinality: many_to_one, approved: false,
+     notes: "Rep's home branch; orders carry their own fulfilling branch."}
+  - {from_entity: returns, from_col: order_id, to_entity: orders, to_col: order_id, cardinality: many_to_one, approved: false,
+     notes: "12% of returns.order_id values are whitespace-padded and do not match without trim(); returns carry branch, product and customer directly."}
+  - {from_entity: returns, from_col: branch_id, to_entity: branches, to_col: branch_id, cardinality: many_to_one, approved: true}
+  - {from_entity: returns, from_col: product_id, to_entity: products, to_col: product_id, cardinality: many_to_one, approved: true}
+  - {from_entity: returns, from_col: customer_id, to_entity: customers, to_col: customer_id, cardinality: many_to_one, approved: true}
+  - {from_entity: inventory_snapshots, from_col: branch_id, to_entity: branches, to_col: branch_id, cardinality: many_to_one, approved: true}
+  - {from_entity: inventory_snapshots, from_col: product_id, to_entity: products, to_col: product_id, cardinality: many_to_one, approved: true}
+  - {from_entity: leads, from_col: branch_id, to_entity: branches, to_col: branch_id, cardinality: many_to_one, approved: true}
+  - {from_entity: leads, from_col: assigned_rep_id, to_entity: sales_reps, to_col: rep_id, cardinality: many_to_one, approved: true}
+  - {from_entity: opportunities, from_col: lead_id, to_entity: leads, to_col: lead_id, cardinality: many_to_one, approved: true}
+  - {from_entity: budgets_branch, from_col: branch_id, to_entity: branches, to_col: branch_id, cardinality: many_to_one, approved: true}
+  - {from_entity: targets, from_col: rep_id, to_entity: sales_reps, to_col: rep_id, cardinality: many_to_one, approved: true}
+  - {from_entity: targets, from_col: branch_id, to_entity: branches, to_col: branch_id, cardinality: many_to_one, approved: true}
+  - {from_entity: operating_expenses, from_col: branch_id, to_entity: branches, to_col: branch_id, cardinality: many_to_one, approved: true}
+  - {from_entity: product_costs, from_col: product_id, to_entity: products, to_col: product_id, cardinality: many_to_one, approved: true}
+
+dimensions:
+  # Orders
+  - {name: order_date, entity: orders, expr: order_date, type: time, label: Order Date, synonyms: [date, order day]}
+  - {name: ship_date, entity: orders, expr: ship_date, type: time, label: Ship Date}
+  - {name: order_status, entity: orders, expr: status, label: Order Status, synonyms: [status]}
+  - {name: channel, entity: orders, expr: channel, label: Sales Channel, synonyms: [order channel]}
+  # Order lines
+  - {name: line_status, entity: order_lines, expr: line_status, label: Line Status}
+  # Branches (canonical geography)
+  - {name: branch, entity: branches, expr: branch_name, label: Branch, synonyms: [store, location, city]}
+  - {name: region, entity: regions, expr: region, label: Region, synonyms: [territory, area, sales region]}
+  - {name: state, entity: branches, expr: state, label: State}
+  - {name: branch_opened_date, entity: branches, expr: opened_date, type: time, label: Branch Opened Date}
+  # Customers
+  - {name: customer, entity: customers, expr: customer_name, label: Customer, synonyms: [account, customer name]}
+  - {name: segment, entity: customer_segments, expr: segment, label: Customer Segment, synonyms: [customer segment, customer type]}
+  - {name: payment_terms, entity: customers, expr: payment_terms, label: Payment Terms}
+  # Products
+  - {name: product, entity: products, expr: product_name, label: Product, synonyms: [item, sku name]}
+  - {name: sku, entity: products, expr: sku, label: SKU}
+  - {name: category, entity: products, expr: category, label: Product Category, synonyms: [product category, product line]}
+  - {name: subcategory, entity: products, expr: subcategory, label: Subcategory}
+  - {name: product_tier, entity: products, expr: tier, label: Product Tier, synonyms: [tier, price tier, good better best]}
+  - {name: product_launch_date, entity: products, expr: launch_date, type: time, label: Product Launch Date}
+  # Sales reps
+  - {name: sales_rep, entity: sales_reps, expr: rep_name, label: Sales Rep, synonyms: [salesperson, rep, account manager]}
+  # Returns
+  - {name: return_date, entity: returns, expr: return_date, type: time, label: Return Date}
+  - {name: return_reason, entity: returns, expr: reason, label: Return Reason}
+  # Inventory
+  - {name: snapshot_date, entity: inventory_snapshots, expr: snapshot_date, type: time, label: Snapshot Date, synonyms: [inventory date]}
+  # Leads and opportunities
+  - {name: lead_created_date, entity: leads, expr: created_date, type: time, label: Lead Created Date}
+  - {name: lead_channel, entity: leads, expr: channel, label: Lead Channel, synonyms: [lead source, marketing channel, source]}
+  - {name: lead_status, entity: leads, expr: status, label: Lead Status}
+  - {name: opportunity_created_date, entity: opportunities, expr: created_date, type: time, label: Opportunity Created Date}
+  - {name: opportunity_close_date, entity: opportunities, expr: close_date, type: time, label: Opportunity Close Date}
+  - {name: opportunity_stage, entity: opportunities, expr: stage, label: Opportunity Stage, synonyms: [stage]}
+  # Plans
+  - {name: forecast_month, entity: revenue_forecast, expr: forecast_month, type: time, label: Forecast Month}
+  - {name: forecast_version, entity: revenue_forecast, expr: forecast_version, label: Forecast Version}
+  - {name: budget_month, entity: budgets_branch, expr: budget_month, type: time, label: Budget Month}
+  - {name: category_budget_month, entity: budgets_category, expr: budget_month, type: time, label: Category Budget Month}
+  - {name: budget_category, entity: budgets_category, expr: category, label: Budget Category}
+  - {name: target_month, entity: targets, expr: target_month, type: time, label: Target Month}
+  - {name: expense_month, entity: operating_expenses, expr: expense_month, type: time, label: Expense Month}
+  - {name: cost_month, entity: product_costs, expr: cost_month, type: time, label: Cost Month}
+
+metrics:
+  # ----- Sales ---------------------------------------------------------------------------
+  - id: revenue
+    name: Revenue
+    label: Revenue
+    description: Net revenue after line discounts. Excludes cancelled orders. Dated by order date. Negative lines (returns keyed as orders) are included, as booked.
+    kind: simple
+    entity: order_lines
+    expr: net_amount
+    agg: sum
+    filters: [{dimension: order_status, op: neq, values: [cancelled]}]
+    format: currency
+    owner: FP&A
+    tags: [sales, finance, core]
+    synonyms: [net revenue, sales, net sales, revenue net]
+    default_time_dimension: order_date
+  - id: gross_revenue
+    name: Gross Revenue
+    label: Gross Revenue
+    description: Revenue at list price (quantity x unit list price) before discounts. Excludes cancelled orders.
+    kind: simple
+    entity: order_lines
+    expr: gross_amount
+    agg: sum
+    filters: [{dimension: order_status, op: neq, values: [cancelled]}]
+    format: currency
+    owner: FP&A
+    tags: [sales, pricing]
+    synonyms: [gross sales, list revenue, revenue at list]
+    default_time_dimension: order_date
+  - id: discount_amount
+    name: Discounts
+    label: Discounts
+    description: Discount dollars given off list price. Excludes cancelled orders.
+    kind: simple
+    entity: order_lines
+    expr: discount_amount
+    agg: sum
+    filters: [{dimension: order_status, op: neq, values: [cancelled]}]
+    format: currency
+    owner: Pricing
+    tags: [pricing]
+    synonyms: [discount dollars, discounts given]
+    default_time_dimension: order_date
+    higher_is_better: false
+  - id: discount_rate
+    name: Discount Rate
+    label: Discount Rate
+    description: Discount dollars as a share of gross (list) revenue. Ratio of sums.
+    kind: ratio
+    numerator: discount_amount
+    denominator: gross_revenue
+    format: percent
+    owner: Pricing
+    tags: [pricing]
+    synonyms: [discount %, discount percent, average discount]
+    higher_is_better: false
+    default_time_dimension: order_date
+  - id: orders
+    name: Orders
+    label: Orders
+    description: Count of distinct non-cancelled orders with at least one line. Not additive across product dimensions (an order spanning two categories counts in both).
+    kind: simple
+    entity: order_lines
+    expr: order_id
+    agg: count_distinct
+    filters: [{dimension: order_status, op: neq, values: [cancelled]}]
+    format: integer
+    owner: Sales Ops
+    tags: [sales, volume, core]
+    synonyms: [order count, number of orders, order volume, transactions]
+    default_time_dimension: order_date
+  - id: units
+    name: Units
+    label: Units Sold
+    description: Quantity sold in selling units of measure. Excludes cancelled orders.
+    kind: simple
+    entity: order_lines
+    expr: quantity
+    agg: sum
+    filters: [{dimension: order_status, op: neq, values: [cancelled]}]
+    format: integer
+    owner: Sales Ops
+    tags: [sales, volume]
+    synonyms: [units sold, quantity, volume, unit volume]
+    default_time_dimension: order_date
+  - id: units_per_order
+    name: Units per Order
+    label: Units per Order
+    description: Average units on a non-cancelled order (basket size in units).
+    kind: derived
+    formula: units / orders
+    format: number
+    owner: Sales Ops
+    tags: [sales, volume]
+    synonyms: [basket size, units per transaction]
+    default_time_dimension: order_date
+  - id: aov
+    name: Average Order Value
+    label: AOV
+    description: Revenue per order (ratio of sums).
+    kind: ratio
+    numerator: revenue
+    denominator: orders
+    format: currency
+    owner: Sales Ops
+    tags: [sales, price]
+    synonyms: [AOV, order value, average order size]
+    default_time_dimension: order_date
+  - id: asp
+    name: Average Selling Price
+    label: ASP
+    description: Revenue per unit sold (ratio of sums). Sensitive to product and tier mix.
+    kind: ratio
+    numerator: revenue
+    denominator: units
+    format: currency
+    owner: Pricing
+    tags: [pricing, price]
+    synonyms: [ASP, average price, price per unit, selling price]
+    default_time_dimension: order_date
+  - id: active_customers
+    name: Active Customers
+    label: Active Customers
+    description: Distinct customers with at least one non-cancelled order in the period.
+    kind: simple
+    entity: orders
+    expr: customer_id
+    agg: count_distinct
+    filters: [{dimension: order_status, op: neq, values: [cancelled]}]
+    format: integer
+    owner: Sales Ops
+    tags: [customers]
+    synonyms: [buying customers, customer count, number of customers]
+    default_time_dimension: order_date
+  - id: orders_per_customer
+    name: Orders per Customer
+    label: Orders per Customer
+    description: Purchase frequency, orders divided by active customers.
+    kind: derived
+    formula: orders / active_customers
+    format: number
+    owner: Sales Ops
+    tags: [customers]
+    synonyms: [purchase frequency, order frequency]
+    default_time_dimension: order_date
+  - id: cogs
+    name: COGS
+    label: COGS
+    description: Cost of goods sold at the unit cost in effect in the order month. Excludes cancelled orders.
+    kind: simple
+    entity: order_lines
+    expr: cost_amount
+    agg: sum
+    filters: [{dimension: order_status, op: neq, values: [cancelled]}]
+    format: currency
+    owner: FP&A
+    tags: [finance, cost]
+    synonyms: [cost of goods sold, cost of sales, product cost]
+    default_time_dimension: order_date
+    higher_is_better: false
+  - id: standard_unit_cost
+    name: Standard Unit Cost
+    label: Standard Unit Cost
+    description: >-
+      Average recorded standard unit cost per product and month (product_costs), not weighted by sales.
+      Tests input-cost changes independently of what was sold.
+    kind: simple
+    entity: product_costs
+    expr: unit_cost
+    agg: avg
+    format: currency
+    owner: Finance
+    tags: [cost, unit_cost]
+    synonyms: [standard cost, recorded unit cost, supplier cost]
+    default_time_dimension: cost_month
+    higher_is_better: false
+  - id: gross_margin
+    name: Gross Margin
+    label: Gross Margin
+    description: Revenue minus COGS, in dollars.
+    kind: derived
+    formula: revenue - cogs
+    format: currency
+    owner: FP&A
+    tags: [finance, margin, core]
+    synonyms: [gross profit, GM dollars, gross margin dollars]
+    default_time_dimension: order_date
+  - id: gross_margin_pct
+    name: Gross Margin %
+    label: Gross Margin %
+    description: Gross margin as a share of revenue (ratio of sums, never an average of line margins).
+    kind: ratio
+    numerator: gross_margin
+    denominator: revenue
+    format: percent
+    owner: FP&A
+    tags: [finance, margin, core]
+    synonyms: [gross margin percent, GM%, gross margin rate, margin %]
+    default_time_dimension: order_date
+  - id: freight_cost
+    name: Freight Cost
+    label: Freight Cost
+    description: Outbound delivery cost per order (zero for counter pickup). Excludes cancelled orders.
+    kind: simple
+    entity: orders
+    expr: freight_cost
+    agg: sum
+    filters: [{dimension: order_status, op: neq, values: [cancelled]}]
+    format: currency
+    owner: Operations
+    tags: [finance, cost]
+    synonyms: [delivery cost, shipping cost]
+    default_time_dimension: order_date
+    higher_is_better: false
+  - id: sales_commission
+    name: Sales Commission
+    label: Sales Commission
+    description: Rep commission on net revenue. Excludes cancelled orders.
+    kind: simple
+    entity: order_lines
+    expr: commission_amount
+    agg: sum
+    filters: [{dimension: order_status, op: neq, values: [cancelled]}]
+    format: currency
+    owner: Sales Ops
+    tags: [finance, cost]
+    synonyms: [commissions]
+    default_time_dimension: order_date
+    higher_is_better: false
+  - id: contribution_margin
+    name: Contribution Margin
+    label: Contribution Margin
+    description: Gross margin less variable selling costs (freight and commission).
+    kind: derived
+    formula: revenue - cogs - freight_cost - sales_commission
+    format: currency
+    owner: FP&A
+    tags: [finance, margin]
+    synonyms: [contribution, CM dollars]
+    default_time_dimension: order_date
+  - id: contribution_margin_pct
+    name: Contribution Margin %
+    label: Contribution Margin %
+    description: Contribution margin as a share of revenue.
+    kind: ratio
+    numerator: contribution_margin
+    denominator: revenue
+    format: percent
+    owner: FP&A
+    tags: [finance, margin]
+    synonyms: [CM%, contribution margin percent]
+    default_time_dimension: order_date
+  - id: operating_expenses
+    name: Operating Expenses
+    label: Operating Expenses
+    description: Branch payroll, occupancy, delivery fleet and other operating costs (actuals), dated by expense month.
+    kind: simple
+    entity: operating_expenses
+    expr: total_opex
+    agg: sum
+    format: currency
+    owner: FP&A
+    tags: [finance, cost]
+    synonyms: [opex, operating costs, branch expenses]
+    default_time_dimension: expense_month
+    higher_is_better: false
+  - id: operating_margin
+    name: Operating Margin
+    label: Operating Margin
+    description: Contribution margin less branch operating expenses. Combine at month or coarser grain (expenses are monthly).
+    kind: derived
+    formula: revenue - cogs - freight_cost - sales_commission - operating_expenses
+    format: currency
+    owner: FP&A
+    tags: [finance, margin]
+    synonyms: [operating profit, EBIT proxy, branch profit]
+    default_time_dimension: order_date
+  # ----- Returns -------------------------------------------------------------------------
+  - id: returns_amount
+    name: Returns
+    label: Returned Revenue
+    description: Net value of returned goods, dated by return date.
+    kind: simple
+    entity: returns
+    expr: return_amount
+    agg: sum
+    format: currency
+    owner: Operations
+    tags: [returns]
+    synonyms: [returned revenue, return value, returns value]
+    default_time_dimension: return_date
+    higher_is_better: false
+  - id: return_rate
+    name: Return Rate
+    label: Return Rate
+    description: Returned revenue as a share of revenue in the same period (returns dated by return date, revenue by order date).
+    kind: ratio
+    numerator: returns_amount
+    denominator: revenue
+    format: percent
+    owner: Operations
+    tags: [returns]
+    synonyms: [returns rate, return %]
+    higher_is_better: false
+    default_time_dimension: order_date
+  # ----- Pipeline ------------------------------------------------------------------------
+  - id: leads
+    name: Leads
+    label: Leads
+    description: Count of leads created in the period.
+    kind: simple
+    entity: leads
+    expr: lead_id
+    agg: count
+    format: integer
+    owner: Marketing
+    tags: [pipeline, core]
+    synonyms: [lead volume, lead count, number of leads]
+    default_time_dimension: lead_created_date
+  - id: converted_leads
+    name: Converted Leads
+    label: Converted Leads
+    description: Leads that became customers (status Converted), counted in the lead's creation period.
+    kind: simple
+    entity: leads
+    expr: is_converted
+    agg: sum
+    format: integer
+    owner: Marketing
+    tags: [pipeline]
+    synonyms: [conversions, won leads]
+    default_time_dimension: lead_created_date
+    maturity_days: 90
+  - id: conversion_rate
+    name: Conversion Rate
+    label: Conversion Rate
+    description: Converted leads divided by leads, by lead creation cohort. Recent cohorts are immature (conversion lag up to ~110 days).
+    kind: ratio
+    numerator: converted_leads
+    denominator: leads
+    format: percent
+    owner: Marketing
+    tags: [pipeline, core]
+    synonyms: [lead conversion, lead conversion rate, conversion, win rate]
+    default_time_dimension: lead_created_date
+  - id: pipeline_amount
+    name: Pipeline Amount
+    label: Pipeline Amount
+    description: Estimated annual value of opportunities, dated by opportunity creation.
+    kind: simple
+    entity: opportunities
+    expr: amount
+    agg: sum
+    format: currency
+    owner: Sales Ops
+    tags: [pipeline]
+    synonyms: [pipeline, opportunity value]
+    default_time_dimension: opportunity_created_date
+  # ----- Inventory -----------------------------------------------------------------------
+  - id: inventory_value
+    name: Inventory Value
+    label: Inventory Value
+    description: On-hand inventory at cost at a month-end snapshot. Semi-additive, compare single snapshot dates and never sum across months.
+    kind: simple
+    entity: inventory_snapshots
+    expr: inventory_value
+    agg: sum
+    format: currency
+    owner: Operations
+    tags: [inventory, semi_additive, core]
+    synonyms: [inventory, stock value, on-hand value, inventory at cost]
+    default_time_dimension: snapshot_date
+    time_aggregation: last
+    higher_is_better: false
+  - id: on_hand_units
+    name: On-Hand Units
+    label: On-Hand Units
+    description: Units on hand at a month-end snapshot. Semi-additive.
+    kind: simple
+    entity: inventory_snapshots
+    expr: on_hand_units
+    agg: sum
+    format: integer
+    owner: Operations
+    tags: [inventory, semi_additive]
+    synonyms: [stock units, units on hand]
+    default_time_dimension: snapshot_date
+    time_aggregation: last
+  - id: daily_usage_value
+    name: Daily Usage at Cost
+    label: Daily Usage at Cost
+    description: Trailing 90-day units sold valued at current unit cost, per day.
+    kind: simple
+    entity: inventory_snapshots
+    expr: units_sold_90d * unit_cost / 90.0
+    agg: sum
+    format: currency
+    owner: Operations
+    tags: [inventory]
+    synonyms: [daily usage, run rate]
+    default_time_dimension: snapshot_date
+    time_aggregation: last
+  - id: days_of_supply
+    name: Days of Supply
+    label: Days of Supply
+    description: Inventory value divided by daily usage at cost (trailing 90 days). Null when nothing sold in 90 days.
+    kind: ratio
+    numerator: inventory_value
+    denominator: daily_usage_value
+    format: number
+    owner: Operations
+    tags: [inventory, core]
+    synonyms: [DOS, days of inventory, days on hand, inventory days]
+    higher_is_better: false
+    default_time_dimension: snapshot_date
+  # ----- Plan ----------------------------------------------------------------------------
+  - id: forecast_revenue
+    name: Forecast Revenue
+    label: Forecast Revenue
+    description: FY26 plan revenue forecast (prior-year actual x 1.05, FP&A adjusted), by month, region and segment.
+    kind: simple
+    entity: revenue_forecast
+    expr: forecast_revenue
+    agg: sum
+    format: currency
+    owner: FP&A
+    tags: [plan, forecast]
+    synonyms: [forecast, revenue forecast, plan forecast]
+    default_time_dimension: forecast_month
+  - id: budget_revenue
+    name: Budget Revenue
+    label: Budget Revenue
+    description: Branch revenue budget from the FP&A workbook.
+    kind: simple
+    entity: budgets_branch
+    expr: revenue_budget
+    agg: sum
+    format: currency
+    owner: FP&A
+    tags: [plan, budget]
+    synonyms: [budget, revenue budget, plan]
+    default_time_dimension: budget_month
+  - id: budget_gross_margin
+    name: Budget Gross Margin
+    label: Budget Gross Margin
+    description: Branch gross margin budget from the FP&A workbook.
+    kind: simple
+    entity: budgets_branch
+    expr: gross_margin_budget
+    agg: sum
+    format: currency
+    owner: FP&A
+    tags: [plan, budget]
+    synonyms: [gross margin budget]
+    default_time_dimension: budget_month
+  - id: revenue_target
+    name: Revenue Target
+    label: Revenue Target
+    description: Sum of monthly rep revenue targets.
+    kind: simple
+    entity: targets
+    expr: revenue_target
+    agg: sum
+    format: currency
+    owner: Sales Ops
+    tags: [plan, targets]
+    synonyms: [target, quota, sales target]
+    default_time_dimension: target_month
+
+metric_trees:
+  - root_metric: revenue
+    name: "Revenue = Orders x AOV"
+    description: >-
+      Volume (orders) times order value. Orders split into active customers x purchase frequency;
+      AOV splits into units per order x average selling price (price, discount and mix).
+    nodes:
+      - {parent: revenue, child: orders, relation: multiplicative}
+      - {parent: revenue, child: aov, relation: multiplicative}
+      - {parent: orders, child: active_customers, relation: multiplicative}
+      - {parent: orders, child: orders_per_customer, relation: multiplicative}
+      - {parent: aov, child: units_per_order, relation: multiplicative}
+      - {parent: aov, child: asp, relation: multiplicative}
+  - root_metric: gross_revenue
+    name: "Gross Revenue = Revenue + Discounts"
+    description: List-price revenue is what was invoiced plus the discounts given (a price view of Revenue).
+    nodes:
+      - {parent: gross_revenue, child: revenue, relation: additive}
+      - {parent: gross_revenue, child: discount_amount, relation: additive}
+  - root_metric: gross_margin
+    name: "Gross Margin = Revenue - COGS"
+    nodes:
+      - {parent: gross_margin, child: revenue, relation: additive}
+      - {parent: gross_margin, child: cogs, relation: subtractive}
+  - root_metric: gross_margin_pct
+    name: "Gross Margin % = Gross Margin / Revenue"
+    nodes:
+      - {parent: gross_margin_pct, child: gross_margin, relation: ratio_numerator}
+      - {parent: gross_margin_pct, child: revenue, relation: ratio_denominator}
+      - {parent: gross_margin, child: revenue, relation: additive}
+      - {parent: gross_margin, child: cogs, relation: subtractive}
+  - root_metric: contribution_margin
+    name: "Contribution Margin = Gross Margin - Freight - Commission"
+    nodes:
+      - {parent: contribution_margin, child: gross_margin, relation: additive}
+      - {parent: contribution_margin, child: freight_cost, relation: subtractive}
+      - {parent: contribution_margin, child: sales_commission, relation: subtractive}
+  - root_metric: operating_margin
+    name: "Operating Margin = Contribution Margin - Operating Expenses"
+    nodes:
+      - {parent: operating_margin, child: contribution_margin, relation: additive}
+      - {parent: operating_margin, child: operating_expenses, relation: subtractive}
+  - root_metric: conversion_rate
+    name: "Conversion Rate = Converted Leads / Leads"
+    nodes:
+      - {parent: conversion_rate, child: converted_leads, relation: ratio_numerator}
+      - {parent: conversion_rate, child: leads, relation: ratio_denominator}
+  - root_metric: discount_rate
+    name: "Discount Rate = Discounts / Gross Revenue"
+    nodes:
+      - {parent: discount_rate, child: discount_amount, relation: ratio_numerator}
+      - {parent: discount_rate, child: gross_revenue, relation: ratio_denominator}
+  - root_metric: days_of_supply
+    name: "Days of Supply = Inventory Value / Daily Usage"
+    nodes:
+      - {parent: days_of_supply, child: inventory_value, relation: ratio_numerator}
+      - {parent: days_of_supply, child: daily_usage_value, relation: ratio_denominator}
+
+glossary:
+  - term: Margin
+    definition: >-
+      Ambiguous at Summit Supply. Finance uses four margin measures: Gross Margin (revenue - COGS),
+      Gross Margin % (gross margin / revenue), Contribution Margin (gross margin - freight - commission)
+      and Operating Margin (contribution margin - branch operating expenses). Ask which one is meant.
+    candidate_metric_ids: [gross_margin, gross_margin_pct, contribution_margin, operating_margin]
+    related: [Gross Margin, Contribution Margin, Operating Margin]
+    synonyms: [margins, profit margin, profitability]
+  - term: Revenue
+    definition: >-
+      Net revenue: what customers are invoiced after line discounts, on non-cancelled orders, dated by
+      order date. "Sales" means Revenue. Gross Revenue is the list-price figure before discounts.
+    formula: SUM(order_lines.net_amount) WHERE orders.status <> 'cancelled'
+    metric_id: revenue
+    related: [Gross Revenue, Discount Rate, Cancelled Order]
+    synonyms: [sales, net sales, top line]
+  - term: Gross Revenue
+    definition: Revenue at list price before discounts; used to measure discounting.
+    formula: SUM(quantity x unit_list_price)
+    metric_id: gross_revenue
+    related: [Revenue, Discount Rate]
+  - term: Cancelled Order
+    definition: >-
+      An order with status 'cancelled'. Its lines stay in order_lines for audit, but every sales metric
+      excludes it through the metric filter order_status <> cancelled.
+    related: [Revenue, Orders]
+    synonyms: [cancellation, cancelled]
+  - term: AOV
+    definition: Average order value, revenue divided by orders.
+    formula: Revenue / Orders
+    metric_id: aov
+    related: [Revenue, Orders, ASP]
+    synonyms: [average order value]
+  - term: ASP
+    definition: Average selling price per unit, revenue divided by units. Moves with price, discounting and product mix.
+    formula: Revenue / Units
+    metric_id: asp
+    related: [Revenue, Units, Product Tier, Discount Rate]
+    synonyms: [average selling price]
+  - term: Discount Rate
+    definition: Discount dollars as a share of gross revenue.
+    formula: Discounts / Gross Revenue
+    metric_id: discount_rate
+    related: [Gross Revenue, Revenue]
+    synonyms: [discounting, promotions, promo depth]
+  - term: Product Tier
+    definition: Good/better/best positioning of a product. Entry (ValueBuild), Standard (ProLine) and Premium (Summit Select). Entry carries lower prices and lower margins.
+    related: [ASP, Gross Margin %]
+    synonyms: [tier, entry-level, entry level, premium]
+  - term: Region
+    definition: Sales region of the fulfilling branch (North Texas, Gulf Coast, Central Texas, West Texas, Oklahoma). Customer billing region in customers.csv is not used for reporting.
+    related: [Branch]
+    synonyms: [territory]
+  - term: Active Customer
+    definition: A customer with at least one non-cancelled order in the period.
+    metric_id: active_customers
+    related: [Revenue, Orders per Customer]
+  - term: Conversion Rate
+    definition: Share of leads created in a period that became customers. Cohort-based on lead creation date.
+    formula: Converted Leads / Leads
+    metric_id: conversion_rate
+    related: [Leads, Lead Channel]
+    synonyms: [conversion, lead conversion]
+  - term: Days of Supply
+    definition: How many days current inventory would last at the trailing 90-day sales rate, at cost.
+    formula: Inventory Value / (90-day usage at cost / 90)
+    metric_id: days_of_supply
+    related: [Inventory Value, Slow-Moving SKU]
+    synonyms: [DOS, days on hand]
+  - term: Slow-Moving SKU
+    definition: A product with more than 180 days of supply at a snapshot date, or no sales in the trailing 90 days while stocked.
+    related: [Days of Supply, Inventory Value]
+    synonyms: [slow mover, dead stock, aged inventory]
+  - term: Inventory Value
+    definition: On-hand units x unit cost at a month-end snapshot. A balance, not a flow; never sum across months.
+    metric_id: inventory_value
+    related: [Days of Supply]
+    synonyms: [inventory, stock]
+  - term: Forecast
+    definition: The FY26 plan forecast (version "FY26 Plan (Dec 2025)"), by month, region and customer segment.
+    metric_id: forecast_revenue
+    related: [Budget, Revenue]
+    synonyms: [plan forecast, revenue forecast]
+  - term: Budget
+    definition: Branch revenue and gross margin budget from the FP&A workbook (budgets.xlsx).
+    metric_id: budget_revenue
+    related: [Forecast, Revenue Target]
+  - term: COGS
+    definition: Cost of goods sold at the product's standard cost in the order month.
+    metric_id: cogs
+    related: [Gross Margin]
+    synonyms: [cost of goods sold, cost of sales, input costs, unit cost]
+  - term: Return Rate
+    definition: Returned revenue as a share of revenue.
+    formula: Returns / Revenue
+    metric_id: return_rate
+    related: [Returns, Revenue]

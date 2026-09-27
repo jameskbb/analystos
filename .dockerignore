@@ -1,0 +1,16 @@
+# Build context for apps/api/Dockerfile (repository root).
+.git
+.venv
+data
+**/node_modules
+**/.next
+**/__pycache__
+**/.pytest_cache
+**/.ruff_cache
+**/.mypy_cache
+apps/web
+tests/e2e
+docs
+*.duckdb
+*.db
+.env

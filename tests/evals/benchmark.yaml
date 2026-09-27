@@ -1,0 +1,229 @@
+# AnalystOS analytical benchmark (spec §81, §83) on the Summit Supply Co. demo.
+#
+# Every question runs through the deterministic investigator (no LLM) against the loaded demo
+# workspace with today = 2026-09-18. Each expectation names evidence that must appear in the
+# investigation tree; `required: true` expectations fail the eval, the rest are scored.
+# Numbers come from scenarios.json (the answer key measured from the data), never from here.
+#
+# Expectation kinds
+#   headline      root node: metric, direction, optional pct/pp targets (answer-key path + tolerance)
+#   top_driver    the first-level driver with the largest share is `metric`
+#   driver        a driver node for `metric` moves in `direction`
+#   segment       a segment node dimension=value (optional metric, direction, min_share, max_rank)
+#   check         a check node for one of `metrics` moves in `direction`
+#   set           at least `min_hits` of `values` (answer-key path) appear as segments of `dimension`
+#   ambiguity     the first pass stops with needs_disambiguation offering `candidates`
+#   traceable     every evidence node reaches an executed-SQL artifact through its lineage
+#   period        the analysis window/baseline equal the story's periods (premise-driven choice)
+#   premise       a premise-check node exists and holds (or not, with holds: false)
+#   bridge        margin bridge effect `label` is within tolerance_pp of the answer key `key`
+#   no_driver     no first-level driver for `metric` (circular identities are not explanations)
+#   no_overlap_shares  no ratio segment in `metrics` x `dimensions` claims a share (overlapping segments)
+#   brief_contains     the brief answer contains every text in `texts`
+#   comparison    the interpretation's comparison kind (and baseline metric / segments)
+#   ranked_growth a breakdown ranked by growth rate exists (optionally for `dimension`, fastest `first`)
+#   discount_effect  the discount-rate check reports the rate change and its revenue effect (answer key kpis)
+#   mix           a ratio segment's mix effect has the given sign
+#
+# Every spec §83 wording is asked literally (review R-28); rephrasings are kept only as extra
+# questions. Nothing is marked "required: false" because the engine could not do it.
+
+questions:
+  - id: revenue_decline
+    benchmark: "Why did revenue decline?"
+    question: "Why was August revenue down?"
+    story: revenue_decline_aug_2026
+    expect:
+      - {id: headline, kind: headline, metric: revenue, direction: down, pct_key: headline.pct_change,
+         tolerance_pp: 0.3, required: true}
+      - {id: numbers_match_answer_key, kind: headline_values, current_key: headline.current,
+         baseline_key: headline.baseline, required: true}
+      - {id: order_volume_major_driver, kind: top_driver, metric: orders, required: true}
+      - {id: dallas_major_driver, kind: segment, dimension: branch, value: Dallas, direction: down,
+         min_share: 0.35, max_rank: 1, required: true}
+      - {id: major_customer_reduction, kind: segment, dimension: customer, value: Trinity Ridge Construction,
+         direction: down, max_rank: 1, required: true}
+      - {id: discounting_secondary, kind: check, metrics: [discount_rate], direction: up, required: true}
+      - {id: discount_revenue_effect, kind: discount_effect, tolerance: 5000, required: true}
+      - {id: asp_down, kind: driver, metric: asp, direction: down, required: true}
+      - {id: entry_tier_mix, kind: mix, metric: asp, dimension: product_tier, value: Entry, sign: negative,
+         required: true}
+      - {id: insulation_offset, kind: segment, dimension: category, value: Insulation, direction: up,
+         required: true}
+      - {id: no_aov_shares_by_product, kind: no_overlap_shares, metrics: [aov, orders_per_customer],
+         dimensions: [category, product, product_tier, sku, subcategory], required: true}
+      - {id: brief_names_dallas_and_customer, kind: brief_contains,
+         texts: ["Dallas accounts for 49% of the Revenue change", "Trinity Ridge Construction"], required: true}
+      - {id: traceable, kind: traceable, required: true}
+
+  - id: region_driver
+    benchmark: "Which region drove it?"
+    question: "Which region drove the August revenue decline?"
+    story: revenue_decline_aug_2026
+    expect:
+      - {id: north_texas, kind: segment, dimension: region, value: North Texas, direction: down, max_rank: 1,
+         required: true}
+      - {id: dallas_within, kind: segment, dimension: branch, value: Dallas, direction: down, max_rank: 1,
+         required: true}
+
+  - id: customers_decline
+    benchmark: "Which customers contributed most?"
+    question: "Which customers contributed most to the August revenue decline?"
+    story: revenue_decline_aug_2026
+    expect:
+      - {id: trinity_ridge_first, kind: segment, dimension: customer, value: Trinity Ridge Construction,
+         direction: down, max_rank: 1, required: true}
+
+  - id: margin_flat_revenue
+    benchmark: "Why did margin decline despite flat revenue? (acceptance flow 2, literal)"
+    question: "Revenue was roughly flat. Why did margin decline?"
+    story: margin_compression_q2_2026
+    choices: {margin: gross_margin_pct}
+    expect:
+      - {id: margin_is_ambiguous, kind: ambiguity, term: margin,
+         candidates: [gross_margin, gross_margin_pct, contribution_margin, operating_margin], required: true}
+      - {id: period_where_revenue_flat, kind: period, required: true}
+      - {id: premise_holds, kind: premise, holds: true, required: true}
+      - {id: gm_pct_down, kind: headline, metric: gross_margin_pct, direction: down, required: true}
+      - {id: unit_cost_effect, kind: bridge, label: Unit cost, key: attribution_pp.unit_cost_inflation,
+         tolerance_pp: 0.3, required: true}
+      - {id: discount_effect, kind: bridge, label: Discounting, key: attribution_pp.discounting,
+         tolerance_pp: 0.3, required: true}
+      - {id: mix_effect, kind: bridge, label: Mix and other, key: attribution_pp.residual_mix_and_other,
+         tolerance_pp: 0.3, required: true}
+      - {id: no_circular_gm_driver, kind: no_driver, metric: gross_margin, required: true}
+      - {id: cogs_up, kind: driver, metric: cogs, direction: up, required: true}
+      - {id: lumber_cost, kind: segment, dimension: category, value: Lumber, metric: cogs, max_rank: 1,
+         required: true}
+      - {id: roofing_cost, kind: segment, dimension: category, value: Roofing, metric: cogs, max_rank: 2,
+         required: true}
+      - {id: brief_names_cost_and_discount, kind: brief_contains, texts: ["Unit cost", "Discounting"],
+         required: true}
+      - {id: traceable, kind: traceable, required: true}
+
+  - id: margin_flat_revenue_explicit_period
+    benchmark: "Why did margin decline despite flat revenue? (period stated)"
+    question: "Revenue was roughly flat in Q2 2026 versus Q2 2025. Why did margin decline?"
+    story: margin_compression_q2_2026
+    choices: {margin: gross_margin_pct}
+    expect:
+      - {id: period, kind: period, required: true}
+      - {id: yoy, kind: comparison, comparison_kind: yoy, required: true}
+      - {id: premise_holds, kind: premise, holds: true, required: true}
+      - {id: unit_cost_effect, kind: bridge, label: Unit cost, key: attribution_pp.unit_cost_inflation,
+         tolerance_pp: 0.3, required: true}
+      - {id: discount_effect, kind: bridge, label: Discounting, key: attribution_pp.discounting,
+         tolerance_pp: 0.3, required: true}
+      - {id: traceable, kind: traceable, required: true}
+
+  - id: margin_explicit
+    benchmark: "Why did margin decline despite flat revenue? (metric named)"
+    question: "Why did gross margin % decline in Q2 2026 vs Q2 2025?"
+    story: margin_compression_q2_2026
+    expect:
+      - {id: gm_pct_down, kind: headline, metric: gross_margin_pct, direction: down, required: true}
+      - {id: cogs_up, kind: driver, metric: cogs, direction: up, required: true}
+      - {id: lumber, kind: segment, dimension: category, value: Lumber, direction: down, max_rank: 1,
+         required: true}
+      - {id: roofing, kind: segment, dimension: category, value: Roofing, direction: down, max_rank: 2,
+         required: true}
+      - {id: contractor_discounting, kind: segment, dimension: segment, value: Contractor, direction: down,
+         required: true}
+      - {id: traceable, kind: traceable, required: true}
+
+  - id: fastest_growing_spec_phrasing
+    benchmark: "Which products grow fastest? (spec wording, literal)"
+    question: "Which products grow fastest?"
+    story: revenue_decline_aug_2026
+    expect:
+      - {id: ranked, kind: ranked_growth, dimension: product, required: true}
+      - {id: default_metric, kind: headline, metric: revenue, required: true}
+
+  - id: fastest_growing_categories
+    benchmark: "Which products grow fastest? (categories, period stated)"
+    question: "Which product categories grew revenue fastest in August 2026 compared with August 2025?"
+    story: revenue_decline_aug_2026
+    expect:
+      - {id: yoy, kind: comparison, comparison_kind: yoy, required: true}
+      - {id: ranked, kind: ranked_growth, dimension: category, first: Insulation, required: true}
+      - {id: insulation, kind: segment, dimension: category, value: Insulation, direction: up, required: true}
+
+  - id: unhealthy_inventory
+    benchmark: "Which inventory is unhealthy? (spec wording, literal)"
+    question: "Which inventory is unhealthy?"
+    story: inventory_buildup_2026
+    expect:
+      - {id: value_up, kind: headline, metric: inventory_value, direction: up, required: true}
+      - {id: slow_skus, kind: set, dimension: [product, sku], values_key: slow_moving_skus.product_ids,
+         min_hits: 5, required: true}
+      - {id: brief_names_slow_movers, kind: brief_contains, texts: ["slow-moving"], required: true}
+
+  - id: inventory_q2_snapshot
+    benchmark: "Inventory is a balance: Q2 compares snapshots, never sums them"
+    question: "Why did inventory value increase in Q2 2026 compared with Q2 2025?"
+    story: inventory_buildup_2026
+    expect:
+      - {id: value_up, kind: headline, metric: inventory_value, direction: up,
+         pct_key: headline.inventory_value_pct_change, tolerance_pp: 0.3, required: true}
+      - {id: snapshot_values, kind: headline_values, current_key: headline.inventory_value_current,
+         baseline_key: headline.inventory_value_baseline, required: true}
+
+  - id: forecast_miss
+    benchmark: "What caused the forecast miss? (rephrased)"
+    question: "Why was Q2 2026 revenue below forecast?"
+    story: forecast_miss_q2_2026
+    expect:
+      - {id: below_forecast, kind: headline, metric: revenue, direction: down, required: true}
+      - {id: contractor, kind: segment, dimension: segment, value: Contractor, direction: down, max_rank: 1,
+         required: true}
+      - {id: gulf_coast, kind: segment, dimension: region, value: Gulf Coast, direction: down, max_rank: 1,
+         required: true}
+      - {id: central_texas, kind: segment, dimension: region, value: Central Texas, direction: down,
+         required: true}
+
+  - id: forecast_miss_spec_phrasing
+    benchmark: "What caused the forecast miss? (spec wording, literal)"
+    question: "What caused the forecast miss?"
+    story: forecast_miss_q2_2026
+    expect:
+      - {id: forecast_comparison, kind: comparison, comparison_kind: forecast, baseline_metric: forecast_revenue,
+         required: true}
+      - {id: below_forecast, kind: headline, metric: revenue, direction: down, required: true}
+
+  - id: forecast_miss_q2
+    benchmark: "What caused the forecast miss? (spec wording with the story's period)"
+    question: "What caused the forecast miss in Q2 2026?"
+    story: forecast_miss_q2_2026
+    expect:
+      - {id: below_forecast, kind: headline, metric: revenue, direction: down, required: true}
+      - {id: contractor, kind: segment, dimension: segment, value: Contractor, direction: down, max_rank: 1,
+         required: true}
+      - {id: brief_largest_segment, kind: brief_contains, texts: ["Gulf Coast"], required: true}
+
+  - id: conversion_decline
+    benchmark: "Why did conversion decline while lead volume held?"
+    question: "Why did conversion rate decline in Q2 2026?"
+    story: conversion_decline_q2_2026
+    expect:
+      - {id: rate_down, kind: headline, metric: conversion_rate, direction: down, required: true}
+      - {id: paid_search, kind: segment, dimension: lead_channel, value: Paid Search, direction: down,
+         max_rank: 1, required: true}
+      - {id: gulf_coast, kind: segment, dimension: region, value: Gulf Coast, direction: down, max_rank: 1,
+         required: true}
+
+  - id: budget_comparison
+    benchmark: "Comparison engine: actual vs budget"
+    question: "How did August revenue compare to budget?"
+    story: revenue_decline_aug_2026
+    expect:
+      - {id: budget_kind, kind: comparison, comparison_kind: budget, baseline_metric: budget_revenue,
+         required: true}
+      - {id: below_budget, kind: headline, metric: revenue, direction: down, required: true}
+
+  - id: segment_comparison
+    benchmark: "Comparison engine: segment vs segment"
+    question: "Compare Dallas vs Houston revenue in August"
+    story: revenue_decline_aug_2026
+    expect:
+      - {id: segment_kind, kind: comparison, comparison_kind: segment, segments: [Dallas, Houston], required: true}
+      - {id: dallas_above_houston, kind: headline, metric: revenue, direction: up, required: true}

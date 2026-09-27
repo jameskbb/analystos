@@ -1,0 +1,351 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+/*
+ * AnalystOS design tokens.
+ * Neutral grays, one restrained accent (steel blue), 1px borders, small radii.
+ * Semantic statement colors: observation (neutral slate), supported explanation (accent),
+ * hypothesis (amber, always dashed). Evidence strength uses a 4-step ramp.
+ */
+:root {
+  --bg: #ffffff;
+  --bg-subtle: #f7f7f8;
+  --bg-muted: #f0f0f2;
+  --bg-inset: #fafafa;
+  --fg: #18181b;
+  --fg-muted: #52525b;
+  --fg-subtle: #71717a;
+  --fg-faint: #a1a1aa;
+  --border: #e4e4e7;
+  --border-strong: #d4d4d8;
+  --accent: #2f5fb3;
+  --accent-hover: #264f97;
+  --accent-fg: #ffffff;
+  --accent-soft: #eaf0fa;
+  --accent-soft-fg: #22467f;
+  --ring: #2f5fb3;
+  --positive: #1f7a4d;
+  --positive-soft: #e8f4ed;
+  --negative: #b4372f;
+  --negative-soft: #fbecea;
+  --warning: #9a5b00;
+  --warning-soft: #fdf3e2;
+  --hypothesis: #8a5a00;
+  --hypothesis-soft: #fdf6e7;
+  --evidence-strong: #1f7a4d;
+  --evidence-moderate: #2f5fb3;
+  --evidence-weak: #9a5b00;
+  --evidence-none: #71717a;
+  --code-bg: #fafafa;
+  --shadow-pop: 0 4px 16px rgb(0 0 0 / 0.08), 0 1px 3px rgb(0 0 0 / 0.06);
+  --chart-1: #2f5fb3;
+  --chart-2: #c46a1b;
+  --chart-3: #2e8a6e;
+  --chart-4: #8a4fb0;
+  --chart-5: #b4372f;
+  --chart-6: #5f7187;
+  --chart-7: #a88a1c;
+  --chart-8: #3b9bb8;
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  --bg: #111113;
+  --bg-subtle: #18181b;
+  --bg-muted: #202024;
+  --bg-inset: #0c0c0e;
+  --fg: #ededef;
+  --fg-muted: #b4b4bb;
+  --fg-subtle: #8e8e96;
+  --fg-faint: #5d5d66;
+  --border: #2a2a2f;
+  --border-strong: #3a3a41;
+  --accent: #6b95dc;
+  --accent-hover: #86a9e4;
+  --accent-fg: #0c0c0e;
+  --accent-soft: #1a2436;
+  --accent-soft-fg: #a9c2ec;
+  --ring: #6b95dc;
+  --positive: #58b889;
+  --positive-soft: #142a20;
+  --negative: #e5796f;
+  --negative-soft: #331a18;
+  --warning: #e0a852;
+  --warning-soft: #2e2413;
+  --hypothesis: #e0b35c;
+  --hypothesis-soft: #2b2312;
+  --evidence-strong: #58b889;
+  --evidence-moderate: #6b95dc;
+  --evidence-weak: #e0a852;
+  --evidence-none: #8e8e96;
+  --code-bg: #0c0c0e;
+  --shadow-pop: 0 6px 24px rgb(0 0 0 / 0.5), 0 1px 3px rgb(0 0 0 / 0.4);
+  --chart-1: #6b95dc;
+  --chart-2: #e09250;
+  --chart-3: #58b889;
+  --chart-4: #b38ad6;
+  --chart-5: #e5796f;
+  --chart-6: #97a6b8;
+  --chart-7: #d1b54a;
+  --chart-8: #6cc3dc;
+  color-scheme: dark;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-bg-subtle: var(--bg-subtle);
+  --color-bg-muted: var(--bg-muted);
+  --color-bg-inset: var(--bg-inset);
+  --color-fg: var(--fg);
+  --color-fg-muted: var(--fg-muted);
+  --color-fg-subtle: var(--fg-subtle);
+  --color-fg-faint: var(--fg-faint);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-fg: var(--accent-fg);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-soft-fg: var(--accent-soft-fg);
+  --color-ring: var(--ring);
+  --color-positive: var(--positive);
+  --color-positive-soft: var(--positive-soft);
+  --color-negative: var(--negative);
+  --color-negative-soft: var(--negative-soft);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
+  --color-hypothesis: var(--hypothesis);
+  --color-hypothesis-soft: var(--hypothesis-soft);
+  --color-evidence-strong: var(--evidence-strong);
+  --color-evidence-moderate: var(--evidence-moderate);
+  --color-evidence-weak: var(--evidence-weak);
+  --color-evidence-none: var(--evidence-none);
+  --color-code-bg: var(--code-bg);
+  --shadow-pop: var(--shadow-pop);
+  --radius-sm: 3px;
+  --radius: 4px;
+  --radius-md: 5px;
+  --radius-lg: 6px;
+  --font-sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", Inter,
+    "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Code", Menlo, Consolas, monospace;
+  --text-2xs: 11px;
+  --text-2xs--line-height: 16px;
+  --text-xs: 12px;
+  --text-xs--line-height: 16px;
+  --text-sm: 13px;
+  --text-sm--line-height: 20px;
+  --text-base: 14px;
+  --text-base--line-height: 20px;
+  --text-lg: 16px;
+  --text-lg--line-height: 24px;
+  --text-xl: 20px;
+  --text-xl--line-height: 28px;
+  --text-2xl: 24px;
+  --text-2xl--line-height: 32px;
+}
+
+@layer base {
+  *,
+  ::before,
+  ::after {
+    border-color: var(--border);
+  }
+  html {
+    font-size: 13px;
+  }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--font-sans);
+    font-size: 13px;
+    line-height: 20px;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 1px;
+  }
+  ::selection {
+    background: var(--accent-soft);
+  }
+  code,
+  kbd,
+  pre,
+  samp {
+    font-family: var(--font-mono);
+  }
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+}
+
+@layer utilities {
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border-strong) transparent;
+  }
+  .hypothesis-frame {
+    border-style: dashed;
+    border-color: var(--hypothesis);
+  }
+}
+
+/* Resizable panel separators (react-resizable-panels v4) */
+[data-separator] {
+  background: var(--border);
+  transition: background 120ms ease;
+}
+[data-separator]:hover,
+[data-separator][data-separator-state="drag"],
+[data-separator]:focus-visible {
+  background: var(--accent);
+}
+
+/* react-grid-layout */
+.react-grid-layout {
+  position: relative;
+  transition: height 150ms ease;
+}
+.react-grid-item {
+  transition: all 150ms ease;
+  transition-property: left, top, width, height;
+}
+.react-grid-item.cssTransforms {
+  transition-property: transform, width, height;
+}
+.react-grid-item.react-draggable-dragging,
+.react-grid-item.resizing {
+  transition: none;
+  z-index: 3;
+}
+.react-grid-item.react-grid-placeholder {
+  background: var(--accent-soft);
+  border: 1px dashed var(--accent);
+  border-radius: 4px;
+  opacity: 1;
+  z-index: 2;
+}
+.react-grid-item > .react-resizable-handle {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  bottom: 0;
+  right: 0;
+  cursor: se-resize;
+}
+.react-grid-item > .react-resizable-handle::after {
+  content: "";
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  width: 6px;
+  height: 6px;
+  border-right: 1.5px solid var(--fg-faint);
+  border-bottom: 1.5px solid var(--fg-faint);
+}
+
+/* Markdown prose used in notebooks, reports and text tiles */
+.prose-aos {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--fg);
+}
+.prose-aos h1 {
+  font-size: 18px;
+  font-weight: 600;
+  margin: 0.8em 0 0.4em;
+}
+.prose-aos h2 {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 0.8em 0 0.4em;
+}
+.prose-aos h3 {
+  font-size: 13px;
+  font-weight: 600;
+  margin: 0.8em 0 0.3em;
+}
+.prose-aos p {
+  margin: 0.4em 0;
+}
+.prose-aos ul {
+  list-style: disc;
+  padding-left: 1.4em;
+  margin: 0.4em 0;
+}
+.prose-aos ol {
+  list-style: decimal;
+  padding-left: 1.4em;
+  margin: 0.4em 0;
+}
+.prose-aos code {
+  background: var(--bg-muted);
+  border-radius: 3px;
+  padding: 0 4px;
+  font-size: 12px;
+}
+.prose-aos pre {
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 8px 10px;
+  overflow-x: auto;
+}
+.prose-aos table {
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.prose-aos th,
+.prose-aos td {
+  border: 1px solid var(--border);
+  padding: 2px 8px;
+}
+.prose-aos a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.prose-aos blockquote {
+  border-left: 2px solid var(--border-strong);
+  padding-left: 10px;
+  color: var(--fg-muted);
+}
+
+/* Print: reports, business reviews and dashboards export cleanly to PDF via the browser */
+@media print {
+  @page {
+    size: A4;
+    margin: 16mm 14mm;
+  }
+  html,
+  body {
+    background: #fff !important;
+    color: #000 !important;
+    font-size: 11px;
+  }
+  .no-print,
+  [data-app-chrome] {
+    display: none !important;
+  }
+  [data-print-root] {
+    position: static !important;
+    overflow: visible !important;
+    height: auto !important;
+    max-width: none !important;
+    padding: 0 !important;
+  }
+  [data-print-avoid-break] {
+    break-inside: avoid;
+  }
+  a {
+    color: inherit;
+    text-decoration: none;
+  }
+}
