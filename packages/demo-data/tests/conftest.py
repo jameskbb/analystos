@@ -39,9 +39,13 @@ def raw(demo: DemoPaths) -> duckdb.DuckDBPyConnection:
         f"CREATE VIEW customers AS SELECT * FROM read_csv('{d}/customers.csv', types={{'account_opened': 'VARCHAR'}})"
     )
     con.execute(f"CREATE VIEW products AS SELECT * FROM read_csv('{d}/products.csv')")
+    con.execute(f"CREATE VIEW suppliers AS SELECT * FROM read_csv('{d}/suppliers.csv')")
     con.execute(f"CREATE VIEW leads AS SELECT * FROM read_csv('{d}/leads.csv')")
     con.execute(f"CREATE VIEW inventory AS SELECT * FROM read_parquet('{d}/inventory_snapshots.parquet')")
-    con.execute(f"CREATE VIEW forecast AS SELECT * FROM read_csv('{d}/revenue_forecast.csv')")
+    con.execute(f"CREATE VIEW sales_plan AS SELECT * FROM read_csv('{d}/sales_plan.csv')")
+    con.execute(f"CREATE VIEW opex_plan AS SELECT * FROM read_csv('{d}/opex_plan.csv')")
+    con.execute(f"CREATE VIEW opex AS SELECT * FROM read_csv('{d}/operating_expenses.csv')")
+    con.execute(f"CREATE VIEW targets AS SELECT * FROM read_csv('{d}/targets.csv')")
     con.execute(
         f"CREATE VIEW returns AS SELECT * FROM read_csv('{d}/returns.csv', types={{'order_id': 'VARCHAR'}})"
     )

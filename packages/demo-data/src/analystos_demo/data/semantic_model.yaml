@@ -34,12 +34,22 @@ entities:
     table: regions
     primary_key: region
     label: Regions
-    grain_description: One row per sales region (conformed dimension for actuals, leads, budgets and forecast).
+    grain_description: One row per sales region (conformed dimension for actuals, leads, budgets and the operating plan).
   - name: customer_segments
     table: customer_segments
     primary_key: segment
     label: Customer Segments
-    grain_description: One row per customer segment (conformed dimension for actuals, leads and forecast).
+    grain_description: One row per customer segment (conformed dimension for actuals, leads and the operating plan).
+  - name: product_categories
+    table: product_categories
+    primary_key: category
+    label: Product Categories
+    grain_description: One row per product category (conformed dimension for actuals, category budgets and the operating plan).
+  - name: suppliers
+    table: suppliers
+    primary_key: supplier_id
+    label: Suppliers
+    grain_description: One row per supplier (clean supplier names; the free-text products.supplier is not used for reporting).
   - name: branches
     table: branches
     primary_key: branch_id
@@ -74,12 +84,20 @@ entities:
     label: Opportunities
     grain_description: One row per sales opportunity created from a lead.
     default_time_dimension: opportunity_created_date
-  - name: revenue_forecast
-    table: revenue_forecast
-    primary_key: [forecast_month, region, segment]
-    label: Revenue Forecast
-    grain_description: FY26 plan forecast per month, region and customer segment.
-    default_time_dimension: forecast_month
+  - name: sales_plan
+    table: sales_plan
+    primary_key: [plan_month, region, segment, category]
+    label: Sales Plan
+    grain_description: >-
+      FY26 Operating Plan for sales per month, region, customer segment and product category (units, list revenue,
+      discounts, revenue, COGS and sales commission).
+    default_time_dimension: plan_month
+  - name: opex_plan
+    table: opex_plan
+    primary_key: [plan_month, branch_id]
+    label: Operating Expense Plan
+    grain_description: FY26 Operating Plan for freight and branch operating expenses per month and branch.
+    default_time_dimension: opex_plan_month
   - name: budgets_branch
     table: budgets_branch
     primary_key: [branch_id, budget_month]
@@ -102,7 +120,9 @@ entities:
     table: operating_expenses
     primary_key: [expense_month, branch_id]
     label: Operating Expenses
-    grain_description: Actual operating expenses per branch and month.
+    grain_description: >-
+      Actual branch operating expenses per branch and month (headcount, regular payroll, overtime, occupancy, other). Freight is on
+      orders and sales commission on order lines.
     default_time_dimension: expense_month
   - name: product_costs
     table: product_costs
@@ -114,8 +134,13 @@ entities:
 relationships:
   - {from_entity: branches, from_col: region, to_entity: regions, to_col: region, cardinality: many_to_one, approved: true}
   - {from_entity: customers, from_col: segment, to_entity: customer_segments, to_col: segment, cardinality: many_to_one, approved: true}
-  - {from_entity: revenue_forecast, from_col: region, to_entity: regions, to_col: region, cardinality: many_to_one, approved: true}
-  - {from_entity: revenue_forecast, from_col: segment, to_entity: customer_segments, to_col: segment, cardinality: many_to_one, approved: true}
+  - {from_entity: products, from_col: category, to_entity: product_categories, to_col: category, cardinality: many_to_one, approved: true}
+  - {from_entity: products, from_col: supplier_id, to_entity: suppliers, to_col: supplier_id, cardinality: many_to_one, approved: true,
+     notes: "Supplier master key. products.supplier is free text with inconsistent casing and is not used for reporting."}
+  - {from_entity: sales_plan, from_col: region, to_entity: regions, to_col: region, cardinality: many_to_one, approved: true}
+  - {from_entity: sales_plan, from_col: segment, to_entity: customer_segments, to_col: segment, cardinality: many_to_one, approved: true}
+  - {from_entity: sales_plan, from_col: category, to_entity: product_categories, to_col: category, cardinality: many_to_one, approved: true}
+  - {from_entity: budgets_category, from_col: category, to_entity: product_categories, to_col: category, cardinality: many_to_one, approved: true}
   - {from_entity: leads, from_col: segment, to_entity: customer_segments, to_col: segment, cardinality: many_to_one, approved: true}
   - {from_entity: order_lines, from_col: order_id, to_entity: orders, to_col: order_id, cardinality: many_to_one, approved: true}
   - {from_entity: order_lines, from_col: product_id, to_entity: products, to_col: product_id, cardinality: many_to_one, approved: true}
@@ -142,6 +167,7 @@ relationships:
   - {from_entity: targets, from_col: rep_id, to_entity: sales_reps, to_col: rep_id, cardinality: many_to_one, approved: true}
   - {from_entity: targets, from_col: branch_id, to_entity: branches, to_col: branch_id, cardinality: many_to_one, approved: true}
   - {from_entity: operating_expenses, from_col: branch_id, to_entity: branches, to_col: branch_id, cardinality: many_to_one, approved: true}
+  - {from_entity: opex_plan, from_col: branch_id, to_entity: branches, to_col: branch_id, cardinality: many_to_one, approved: true}
   - {from_entity: product_costs, from_col: product_id, to_entity: products, to_col: product_id, cardinality: many_to_one, approved: true}
 
 dimensions:
@@ -164,10 +190,11 @@ dimensions:
   # Products
   - {name: product, entity: products, expr: product_name, label: Product, synonyms: [item, sku name]}
   - {name: sku, entity: products, expr: sku, label: SKU}
-  - {name: category, entity: products, expr: category, label: Product Category, synonyms: [product category, product line]}
+  - {name: category, entity: product_categories, expr: category, label: Product Category, synonyms: [product category, product line]}
   - {name: subcategory, entity: products, expr: subcategory, label: Subcategory}
   - {name: product_tier, entity: products, expr: tier, label: Product Tier, synonyms: [tier, price tier, good better best]}
   - {name: product_launch_date, entity: products, expr: launch_date, type: time, label: Product Launch Date}
+  - {name: supplier, entity: suppliers, expr: supplier_name, label: Supplier, synonyms: [vendor, supplier name, mill]}
   # Sales reps
   - {name: sales_rep, entity: sales_reps, expr: rep_name, label: Sales Rep, synonyms: [salesperson, rep, account manager]}
   # Returns
@@ -183,8 +210,9 @@ dimensions:
   - {name: opportunity_close_date, entity: opportunities, expr: close_date, type: time, label: Opportunity Close Date}
   - {name: opportunity_stage, entity: opportunities, expr: stage, label: Opportunity Stage, synonyms: [stage]}
   # Plans
-  - {name: forecast_month, entity: revenue_forecast, expr: forecast_month, type: time, label: Forecast Month}
-  - {name: forecast_version, entity: revenue_forecast, expr: forecast_version, label: Forecast Version}
+  - {name: plan_month, entity: sales_plan, expr: plan_month, type: time, label: Plan Month}
+  - {name: plan_version, entity: sales_plan, expr: plan_version, label: Plan Version}
+  - {name: opex_plan_month, entity: opex_plan, expr: plan_month, type: time, label: Opex Plan Month}
   - {name: budget_month, entity: budgets_branch, expr: budget_month, type: time, label: Budget Month}
   - {name: category_budget_month, entity: budgets_category, expr: budget_month, type: time, label: Category Budget Month}
   - {name: budget_category, entity: budgets_category, expr: category, label: Budget Category}
@@ -208,6 +236,7 @@ metrics:
     tags: [sales, finance, core]
     synonyms: [net revenue, sales, net sales, revenue net]
     default_time_dimension: order_date
+    related_metrics: [conversion_rate]
   - id: gross_revenue
     name: Gross Revenue
     label: Gross Revenue
@@ -276,7 +305,7 @@ metrics:
     format: integer
     owner: Sales Ops
     tags: [sales, volume]
-    synonyms: [units sold, quantity, volume, unit volume]
+    synonyms: [units sold, quantity, unit volume, units shipped]
     default_time_dimension: order_date
   - id: units_per_order
     name: Units per Order
@@ -390,12 +419,14 @@ metrics:
     format: percent
     owner: FP&A
     tags: [finance, margin, core]
-    synonyms: [gross margin percent, GM%, gross margin rate, margin %]
+    synonyms: [gross margin percent, gross margin percentage, GM%, gross margin rate, margin %]
     default_time_dimension: order_date
   - id: freight_cost
     name: Freight Cost
     label: Freight Cost
-    description: Outbound delivery cost per order (zero for counter pickup). Excludes cancelled orders.
+    description: >-
+      All outbound delivery cost per order, own fleet and carriers (zero for counter pickup): base freight plus the
+      carrier fuel surcharge. Excludes cancelled orders.
     kind: simple
     entity: orders
     expr: freight_cost
@@ -404,9 +435,53 @@ metrics:
     format: currency
     owner: Operations
     tags: [finance, cost]
-    synonyms: [delivery cost, shipping cost]
+    synonyms: [freight, delivery cost, shipping cost]
     default_time_dimension: order_date
     higher_is_better: false
+  - id: base_freight
+    name: Base Freight
+    label: Base Freight
+    description: Freight before the carrier fuel surcharge (delivery rates x delivered orders). Excludes cancelled orders.
+    kind: simple
+    entity: orders
+    expr: base_freight
+    agg: sum
+    filters: [{dimension: order_status, op: neq, values: [cancelled]}]
+    format: currency
+    owner: Operations
+    tags: [finance, cost, freight]
+    synonyms: [freight before surcharge, delivery rates]
+    default_time_dimension: order_date
+    higher_is_better: false
+  - id: fuel_surcharge
+    name: Fuel Surcharge
+    label: Fuel Surcharge
+    description: Carrier fuel surcharge billed on deliveries, part of freight. Excludes cancelled orders.
+    kind: simple
+    entity: orders
+    expr: fuel_surcharge
+    agg: sum
+    filters: [{dimension: order_status, op: neq, values: [cancelled]}]
+    format: currency
+    owner: Operations
+    tags: [finance, cost, freight]
+    synonyms: [fuel surcharges, carrier fuel surcharge, diesel surcharge]
+    default_time_dimension: order_date
+    higher_is_better: false
+  - id: deliveries
+    name: Deliveries
+    label: Deliveries
+    description: Delivered orders (every non-cancelled order except counter pickup). The volume that drives base freight.
+    kind: simple
+    entity: orders
+    expr: order_id
+    agg: count_distinct
+    filters: [{dimension: order_status, op: neq, values: [cancelled]}, {dimension: channel, op: neq, values: [Counter]}]
+    format: integer
+    owner: Operations
+    tags: [operations, freight]
+    synonyms: [delivery volume, delivered orders, shipments]
+    default_time_dimension: order_date
   - id: sales_commission
     name: Sales Commission
     label: Sales Commission
@@ -445,31 +520,145 @@ metrics:
     tags: [finance, margin]
     synonyms: [CM%, contribution margin percent]
     default_time_dimension: order_date
-  - id: operating_expenses
-    name: Operating Expenses
-    label: Operating Expenses
-    description: Branch payroll, occupancy, delivery fleet and other operating costs (actuals), dated by expense month.
+  - id: payroll
+    name: Payroll
+    label: Payroll
+    description: Regular (straight-time) branch payroll, dated by expense month. Overtime is a separate line.
     kind: simple
     entity: operating_expenses
-    expr: total_opex
+    expr: payroll
     agg: sum
     format: currency
     owner: FP&A
-    tags: [finance, cost]
-    synonyms: [opex, operating costs, branch expenses]
+    tags: [finance, cost, opex]
+    synonyms: [regular payroll, wages, salaries]
     default_time_dimension: expense_month
     higher_is_better: false
-  - id: operating_margin
-    name: Operating Margin
-    label: Operating Margin
-    description: Contribution margin less branch operating expenses. Combine at month or coarser grain (expenses are monthly).
-    kind: derived
-    formula: revenue - cogs - freight_cost - sales_commission - operating_expenses
+  - id: overtime
+    name: Overtime
+    label: Overtime
+    description: Branch overtime pay, dated by expense month.
+    kind: simple
+    entity: operating_expenses
+    expr: overtime
+    agg: sum
     format: currency
     owner: FP&A
-    tags: [finance, margin]
-    synonyms: [operating profit, EBIT proxy, branch profit]
+    tags: [finance, cost, opex]
+    synonyms: [overtime pay, OT]
+    default_time_dimension: expense_month
+    higher_is_better: false
+  - id: occupancy
+    name: Occupancy
+    label: Occupancy
+    description: Branch rent, property costs and utilities, dated by expense month.
+    kind: simple
+    entity: operating_expenses
+    expr: occupancy
+    agg: sum
+    format: currency
+    owner: FP&A
+    tags: [finance, cost, opex]
+    synonyms: [rent, facilities]
+    default_time_dimension: expense_month
+    higher_is_better: false
+  - id: other_opex
+    name: Other Operating Expenses
+    label: Other Operating Expenses
+    description: Other branch operating costs (IT, supplies, maintenance, travel), dated by expense month.
+    kind: simple
+    entity: operating_expenses
+    expr: other_opex
+    agg: sum
+    format: currency
+    owner: FP&A
+    tags: [finance, cost, opex]
+    synonyms: [other opex, other expenses]
+    default_time_dimension: expense_month
+    higher_is_better: false
+  - id: labor_cost
+    name: Labor Cost
+    label: Labor Cost
+    description: Branch labor, regular payroll plus overtime, dated by expense month.
+    kind: derived
+    formula: payroll + overtime
+    format: currency
+    owner: FP&A
+    tags: [finance, cost, opex]
+    synonyms: [labor, labour cost, staff cost, wages and overtime]
+    default_time_dimension: expense_month
+    higher_is_better: false
+  - id: headcount
+    name: Headcount
+    label: Headcount (FTE)
+    description: >-
+      Full-time equivalent employees on branch payroll. A monthly level: over a period it is the average of the
+      monthly totals, never their sum.
+    kind: simple
+    entity: operating_expenses
+    expr: headcount
+    agg: sum
+    time_aggregation: avg
+    format: number
+    unit: FTE
+    owner: FP&A
+    tags: [operations, labor]
+    synonyms: [FTE, staffing, employees, head count]
+    default_time_dimension: expense_month
+  - id: operating_expenses
+    name: Operating Expenses
+    label: Operating Expenses
+    description: >-
+      All operating expenses: freight, sales commission, regular payroll, overtime, occupancy and other branch costs.
+      Combine at month or coarser grain (branch expenses are monthly).
+    kind: derived
+    formula: freight_cost + labor_cost + sales_commission + occupancy + other_opex
+    format: currency
+    owner: FP&A
+    tags: [finance, cost, opex]
+    synonyms: [opex, operating costs, expenses]
     default_time_dimension: order_date
+    higher_is_better: false
+  - id: operating_profit
+    name: Operating Profit
+    label: Operating Profit
+    description: >-
+      Gross margin less operating expenses (freight, commission and branch operating costs). Combine at month or
+      coarser grain (branch expenses are monthly).
+    kind: derived
+    formula: gross_margin - operating_expenses
+    format: currency
+    owner: FP&A
+    tags: [finance, profit, core]
+    synonyms: [operating income, EBIT proxy, branch profit]
+    default_time_dimension: order_date
+  - id: operating_margin_pct
+    name: Operating Margin %
+    label: Operating Margin %
+    description: Operating profit as a share of revenue.
+    kind: ratio
+    numerator: operating_profit
+    denominator: revenue
+    format: percent
+    owner: FP&A
+    tags: [finance, profit]
+    synonyms: [operating margin percent, OP%, operating profit margin]
+    default_time_dimension: order_date
+  - id: cost_to_list_ratio
+    name: Cost to List Ratio
+    label: COGS per List Dollar
+    description: >-
+      COGS as a share of gross (list-price) revenue: what a dollar of list-price sales costs. Moves with unit costs
+      when list prices are unchanged; unlike cost per unit it does not move with product mix inside a category.
+    kind: ratio
+    numerator: cogs
+    denominator: gross_revenue
+    format: percent
+    owner: FP&A
+    tags: [finance, cost, unit_cost]
+    synonyms: [cost per list dollar, cost ratio, standard cost ratio]
+    default_time_dimension: order_date
+    higher_is_better: false
   # ----- Returns -------------------------------------------------------------------------
   - id: returns_amount
     name: Returns
@@ -536,8 +725,24 @@ metrics:
     format: percent
     owner: Marketing
     tags: [pipeline, core]
-    synonyms: [lead conversion, lead conversion rate, conversion, win rate]
+    synonyms: [lead conversion, lead conversion rate, conversion, win rate, converting, funnel]
     default_time_dimension: lead_created_date
+    related_metrics: [median_first_response_hours]
+  - id: median_first_response_hours
+    name: Median First Response Time
+    label: Median First Response (hours)
+    description: Median hours from lead creation to the first sales response, by lead creation cohort.
+    kind: simple
+    entity: leads
+    expr: first_response_hours
+    agg: median
+    format: number
+    unit: hours
+    owner: Marketing
+    tags: [pipeline, responsiveness]
+    synonyms: [first response time, response time, speed to lead, lead response time]
+    default_time_dimension: lead_created_date
+    higher_is_better: false
   - id: pipeline_amount
     name: Pipeline Amount
     label: Pipeline Amount
@@ -608,58 +813,353 @@ metrics:
     synonyms: [DOS, days of inventory, days on hand, inventory days]
     higher_is_better: false
     default_time_dimension: snapshot_date
-  # ----- Plan ----------------------------------------------------------------------------
-  - id: forecast_revenue
-    name: Forecast Revenue
-    label: Forecast Revenue
-    description: FY26 plan revenue forecast (prior-year actual x 1.05, FP&A adjusted), by month, region and segment.
+  # ----- Plan: the FY26 Operating Plan (sales_plan, opex_plan), budgets and targets --------
+  # Every plan metric names the actual it plans (plan_for), so plan variances decompose
+  # through the same governed metric tree as actual changes.
+  - id: plan_revenue
+    name: Revenue Plan
+    label: Revenue Plan
+    description: FY26 Operating Plan net revenue (list revenue less planned discounts).
     kind: simple
-    entity: revenue_forecast
-    expr: forecast_revenue
+    entity: sales_plan
+    expr: plan_revenue
     agg: sum
     format: currency
     owner: FP&A
-    tags: [plan, forecast]
-    synonyms: [forecast, revenue forecast, plan forecast]
-    default_time_dimension: forecast_month
+    tags: [plan]
+    plan_for: revenue
+    default_time_dimension: plan_month
+  - id: plan_gross_revenue
+    name: Gross Revenue Plan
+    label: Gross Revenue Plan
+    description: FY26 Operating Plan revenue at list price.
+    kind: simple
+    entity: sales_plan
+    expr: plan_gross_revenue
+    agg: sum
+    format: currency
+    owner: FP&A
+    tags: [plan]
+    plan_for: gross_revenue
+    default_time_dimension: plan_month
+  - id: plan_discount_amount
+    name: Discounts Plan
+    label: Discounts Plan
+    description: FY26 Operating Plan discount dollars (prior-year discount rate per region, segment and category).
+    kind: simple
+    entity: sales_plan
+    expr: plan_discount_amount
+    agg: sum
+    format: currency
+    owner: FP&A
+    tags: [plan]
+    plan_for: discount_amount
+    default_time_dimension: plan_month
+    higher_is_better: false
+  - id: plan_units
+    name: Units Plan
+    label: Units Plan
+    description: FY26 Operating Plan units.
+    kind: simple
+    entity: sales_plan
+    expr: plan_units
+    agg: sum
+    format: integer
+    owner: FP&A
+    tags: [plan]
+    plan_for: units
+    default_time_dimension: plan_month
+  - id: plan_cogs
+    name: COGS Plan
+    label: COGS Plan
+    description: FY26 Operating Plan cost of goods sold (prior-year unit cost plus planned inflation).
+    kind: simple
+    entity: sales_plan
+    expr: plan_cogs
+    agg: sum
+    format: currency
+    owner: FP&A
+    tags: [plan]
+    plan_for: cogs
+    default_time_dimension: plan_month
+    higher_is_better: false
+  - id: plan_gross_margin
+    name: Gross Margin Plan
+    label: Gross Margin Plan
+    description: FY26 Operating Plan gross margin.
+    kind: derived
+    formula: plan_revenue - plan_cogs
+    format: currency
+    owner: FP&A
+    tags: [plan]
+    plan_for: gross_margin
+    default_time_dimension: plan_month
+  - id: plan_gross_margin_pct
+    name: Gross Margin % Plan
+    label: Gross Margin % Plan
+    description: FY26 Operating Plan gross margin as a share of plan revenue.
+    kind: ratio
+    numerator: plan_gross_margin
+    denominator: plan_revenue
+    format: percent
+    owner: FP&A
+    tags: [plan]
+    plan_for: gross_margin_pct
+    default_time_dimension: plan_month
+  - id: plan_discount_rate
+    name: Discount Rate Plan
+    label: Discount Rate Plan
+    description: FY26 Operating Plan discount dollars as a share of plan list revenue.
+    kind: ratio
+    numerator: plan_discount_amount
+    denominator: plan_gross_revenue
+    format: percent
+    owner: FP&A
+    tags: [plan]
+    plan_for: discount_rate
+    default_time_dimension: plan_month
+    higher_is_better: false
+  - id: plan_cost_to_list_ratio
+    name: Cost to List Ratio Plan
+    label: Cost to List Ratio Plan
+    description: FY26 Operating Plan COGS as a share of plan list revenue.
+    kind: ratio
+    numerator: plan_cogs
+    denominator: plan_gross_revenue
+    format: percent
+    owner: FP&A
+    tags: [plan]
+    plan_for: cost_to_list_ratio
+    default_time_dimension: plan_month
+    higher_is_better: false
+  - id: plan_sales_commission
+    name: Sales Commission Plan
+    label: Sales Commission Plan
+    description: FY26 Operating Plan sales commission (prior-year commission rate).
+    kind: simple
+    entity: sales_plan
+    expr: plan_sales_commission
+    agg: sum
+    format: currency
+    owner: FP&A
+    tags: [plan]
+    plan_for: sales_commission
+    default_time_dimension: plan_month
+    higher_is_better: false
+  - id: plan_freight_cost
+    name: Freight Cost Plan
+    label: Freight Cost Plan
+    description: FY26 Operating Plan freight per branch (base freight plus fuel surcharge).
+    kind: derived
+    formula: plan_base_freight + plan_fuel_surcharge
+    format: currency
+    owner: FP&A
+    tags: [plan]
+    plan_for: freight_cost
+    default_time_dimension: opex_plan_month
+    higher_is_better: false
+  - id: plan_payroll
+    name: Payroll Plan
+    label: Payroll Plan
+    description: FY26 Operating Plan regular payroll per branch.
+    kind: simple
+    entity: opex_plan
+    expr: plan_payroll
+    agg: sum
+    format: currency
+    owner: FP&A
+    tags: [plan]
+    plan_for: payroll
+    default_time_dimension: opex_plan_month
+    higher_is_better: false
+  - id: plan_overtime
+    name: Overtime Plan
+    label: Overtime Plan
+    description: FY26 Operating Plan overtime per branch.
+    kind: simple
+    entity: opex_plan
+    expr: plan_overtime
+    agg: sum
+    format: currency
+    owner: FP&A
+    tags: [plan]
+    plan_for: overtime
+    default_time_dimension: opex_plan_month
+    higher_is_better: false
+  - id: plan_occupancy
+    name: Occupancy Plan
+    label: Occupancy Plan
+    description: FY26 Operating Plan occupancy per branch.
+    kind: simple
+    entity: opex_plan
+    expr: plan_occupancy
+    agg: sum
+    format: currency
+    owner: FP&A
+    tags: [plan]
+    plan_for: occupancy
+    default_time_dimension: opex_plan_month
+    higher_is_better: false
+  - id: plan_other_opex
+    name: Other Operating Expenses Plan
+    label: Other Operating Expenses Plan
+    description: FY26 Operating Plan other branch operating costs.
+    kind: simple
+    entity: opex_plan
+    expr: plan_other_opex
+    agg: sum
+    format: currency
+    owner: FP&A
+    tags: [plan]
+    plan_for: other_opex
+    default_time_dimension: opex_plan_month
+    higher_is_better: false
+  - id: plan_base_freight
+    name: Base Freight Plan
+    label: Base Freight Plan
+    description: FY26 Operating Plan base freight per branch (prior-year base freight share of revenue on plan revenue, plus a 2% carrier rate increase).
+    kind: simple
+    entity: opex_plan
+    expr: plan_base_freight
+    agg: sum
+    format: currency
+    owner: FP&A
+    tags: [plan]
+    plan_for: base_freight
+    default_time_dimension: opex_plan_month
+    higher_is_better: false
+  - id: plan_fuel_surcharge
+    name: Fuel Surcharge Plan
+    label: Fuel Surcharge Plan
+    description: FY26 Operating Plan carrier fuel surcharge per branch (the prior-year surcharge share of base freight).
+    kind: simple
+    entity: opex_plan
+    expr: plan_fuel_surcharge
+    agg: sum
+    format: currency
+    owner: FP&A
+    tags: [plan]
+    plan_for: fuel_surcharge
+    default_time_dimension: opex_plan_month
+    higher_is_better: false
+  - id: plan_deliveries
+    name: Deliveries Plan
+    label: Deliveries Plan
+    description: FY26 Operating Plan delivered orders per branch (prior-year deliveries per revenue dollar on plan revenue).
+    kind: simple
+    entity: opex_plan
+    expr: plan_deliveries
+    agg: sum
+    format: integer
+    owner: FP&A
+    tags: [plan]
+    plan_for: deliveries
+    default_time_dimension: opex_plan_month
+  - id: plan_labor_cost
+    name: Labor Cost Plan
+    label: Labor Cost Plan
+    description: FY26 Operating Plan labor cost (payroll plus overtime).
+    kind: derived
+    formula: plan_payroll + plan_overtime
+    format: currency
+    owner: FP&A
+    tags: [plan]
+    plan_for: labor_cost
+    default_time_dimension: opex_plan_month
+    higher_is_better: false
+  - id: plan_headcount
+    name: Headcount Plan
+    label: Headcount Plan (FTE)
+    description: FY26 Operating Plan branch headcount (the prior-year staffing of the same month). Averaged over a period, never summed.
+    kind: simple
+    entity: opex_plan
+    expr: plan_headcount
+    agg: sum
+    time_aggregation: avg
+    format: number
+    unit: FTE
+    owner: FP&A
+    tags: [plan]
+    plan_for: headcount
+    default_time_dimension: opex_plan_month
+  - id: plan_operating_expenses
+    name: Operating Expenses Plan
+    label: Operating Expenses Plan
+    description: FY26 Operating Plan operating expenses.
+    kind: derived
+    formula: plan_freight_cost + plan_labor_cost + plan_sales_commission + plan_occupancy + plan_other_opex
+    format: currency
+    owner: FP&A
+    tags: [plan]
+    plan_for: operating_expenses
+    default_time_dimension: plan_month
+    higher_is_better: false
+  - id: plan_operating_profit
+    name: Operating Profit Plan
+    label: Operating Profit Plan
+    description: FY26 Operating Plan operating profit.
+    kind: derived
+    formula: plan_gross_margin - plan_operating_expenses
+    format: currency
+    owner: FP&A
+    tags: [plan]
+    plan_for: operating_profit
+    default_time_dimension: plan_month
+  - id: plan_operating_margin_pct
+    name: Operating Margin % Plan
+    label: Operating Margin % Plan
+    description: FY26 Operating Plan operating profit as a share of plan revenue.
+    kind: ratio
+    numerator: plan_operating_profit
+    denominator: plan_revenue
+    format: percent
+    owner: FP&A
+    tags: [plan]
+    plan_for: operating_margin_pct
+    default_time_dimension: plan_month
   - id: budget_revenue
     name: Budget Revenue
     label: Budget Revenue
-    description: Branch revenue budget from the FP&A workbook.
+    description: Branch revenue budget from the FP&A workbook. FY26 rows are the branch allocation of the FY26 Operating Plan.
     kind: simple
     entity: budgets_branch
     expr: revenue_budget
     agg: sum
     format: currency
     owner: FP&A
-    tags: [plan, budget]
-    synonyms: [budget, revenue budget, plan]
+    tags: [budget]
+    plan_for: revenue
+    synonyms: [budget, revenue budget]
     default_time_dimension: budget_month
   - id: budget_gross_margin
     name: Budget Gross Margin
     label: Budget Gross Margin
-    description: Branch gross margin budget from the FP&A workbook.
+    description: Branch gross margin budget from the FP&A workbook. FY26 rows are the branch allocation of the FY26 Operating Plan.
     kind: simple
     entity: budgets_branch
     expr: gross_margin_budget
     agg: sum
     format: currency
     owner: FP&A
-    tags: [plan, budget]
+    tags: [budget]
+    plan_for: gross_margin
     synonyms: [gross margin budget]
     default_time_dimension: budget_month
   - id: revenue_target
     name: Revenue Target
     label: Revenue Target
-    description: Sum of monthly rep revenue targets.
+    description: >-
+      Sum of monthly rep revenue quotas. FY26 quotas split each branch's FY26 Operating Plan revenue across its reps,
+      so for FY26 the revenue target equals plan revenue.
     kind: simple
     entity: targets
     expr: revenue_target
     agg: sum
     format: currency
     owner: Sales Ops
-    tags: [plan, targets]
-    synonyms: [target, quota, sales target]
+    tags: [target, targets]
+    plan_for: revenue
+    synonyms: [target, quota, sales target, sales quota]
     default_time_dimension: target_month
 
 metric_trees:
@@ -699,11 +1199,26 @@ metric_trees:
       - {parent: contribution_margin, child: gross_margin, relation: additive}
       - {parent: contribution_margin, child: freight_cost, relation: subtractive}
       - {parent: contribution_margin, child: sales_commission, relation: subtractive}
-  - root_metric: operating_margin
-    name: "Operating Margin = Contribution Margin - Operating Expenses"
+  - root_metric: operating_profit
+    name: "Operating Profit = Gross Margin - Operating Expenses"
+    description: >-
+      Gross margin splits into revenue less COGS; operating expenses into freight (base freight plus fuel surcharge),
+      labor (regular payroll plus overtime), sales commission, occupancy and other branch costs. Every node has a plan metric (plan_for), so a variance against the
+      FY26 Operating Plan decomposes through the same identities.
     nodes:
-      - {parent: operating_margin, child: contribution_margin, relation: additive}
-      - {parent: operating_margin, child: operating_expenses, relation: subtractive}
+      - {parent: operating_profit, child: gross_margin, relation: additive}
+      - {parent: operating_profit, child: operating_expenses, relation: subtractive}
+      - {parent: gross_margin, child: revenue, relation: additive}
+      - {parent: gross_margin, child: cogs, relation: subtractive}
+      - {parent: operating_expenses, child: freight_cost, relation: additive}
+      - {parent: operating_expenses, child: labor_cost, relation: additive}
+      - {parent: operating_expenses, child: sales_commission, relation: additive}
+      - {parent: operating_expenses, child: occupancy, relation: additive}
+      - {parent: operating_expenses, child: other_opex, relation: additive}
+      - {parent: freight_cost, child: base_freight, relation: additive}
+      - {parent: freight_cost, child: fuel_surcharge, relation: additive}
+      - {parent: labor_cost, child: payroll, relation: additive}
+      - {parent: labor_cost, child: overtime, relation: additive}
   - root_metric: conversion_rate
     name: "Conversion Rate = Converted Leads / Leads"
     nodes:
@@ -725,9 +1240,10 @@ glossary:
     definition: >-
       Ambiguous at Summit Supply. Finance uses four margin measures: Gross Margin (revenue - COGS),
       Gross Margin % (gross margin / revenue), Contribution Margin (gross margin - freight - commission)
-      and Operating Margin (contribution margin - branch operating expenses). Ask which one is meant.
-    candidate_metric_ids: [gross_margin, gross_margin_pct, contribution_margin, operating_margin]
-    related: [Gross Margin, Contribution Margin, Operating Margin]
+      and Operating Profit, the operating margin in dollars (gross margin - all operating expenses).
+      Ask which one is meant.
+    candidate_metric_ids: [gross_margin, gross_margin_pct, contribution_margin, operating_profit]
+    related: [Gross Margin, Contribution Margin, Operating Profit]
     synonyms: [margins, profit margin, profitability]
   - term: Revenue
     definition: >-
@@ -789,7 +1305,7 @@ glossary:
     formula: Inventory Value / (90-day usage at cost / 90)
     metric_id: days_of_supply
     related: [Inventory Value, Slow-Moving SKU]
-    synonyms: [DOS, days on hand]
+    synonyms: [DOS, days on hand, gathering dust, not moving, sitting on the shelf]
   - term: Slow-Moving SKU
     definition: A product with more than 180 days of supply at a snapshot date, or no sales in the trailing 90 days while stocked.
     related: [Days of Supply, Inventory Value]
@@ -798,21 +1314,119 @@ glossary:
     definition: On-hand units x unit cost at a month-end snapshot. A balance, not a flow; never sum across months.
     metric_id: inventory_value
     related: [Days of Supply]
-    synonyms: [inventory, stock]
-  - term: Forecast
-    definition: The FY26 plan forecast (version "FY26 Plan (Dec 2025)"), by month, region and customer segment.
-    metric_id: forecast_revenue
-    related: [Budget, Revenue]
-    synonyms: [plan forecast, revenue forecast]
+    synonyms: [inventory, stock, cash tied up, tied up, cash tied up in inventory, cash tied up in stock]
+  - term: Operating Plan
+    definition: >-
+      The FY26 Operating Plan, approved by the board in December 2025: the one plan for FY26. It plans sales by month,
+      region, customer segment and product category (sales_plan) and freight and branch operating expenses by month
+      and branch (opex_plan). Method: prior-year actual per cell x volume growth by segment, list prices +1.5%, unit
+      costs +2%, prior-year discount and commission rates; opex lines prior-year x planned increases. Branch budgets
+      and rep revenue targets for FY26 are allocations of this plan.
+    metric_id: plan_operating_profit
+    related: [Operating Profit, Budget, Revenue Target]
+    synonyms: [plan, FY26 plan, annual operating plan, AOP, operating budget]
+  - term: Operating Profit
+    definition: >-
+      Gross margin less all operating expenses (freight, sales commission, regular payroll, overtime, occupancy and
+      other branch costs). Summit's bottom line before corporate overhead, interest and tax.
+    formula: Gross Margin - Operating Expenses
+    metric_id: operating_profit
+    related: [Gross Margin, Operating Expenses, Operating Plan]
+    synonyms: [operating income, EBIT proxy, bottom line]
+  - term: Net Profit
+    definition: >-
+      In Summit Supply's management P&L, "net profit" refers to Operating Profit: interest and tax are held at
+      corporate and are not in this dataset, so the lowest governed profit line is Operating Profit (gross margin
+      less all operating expenses).
+    metric_id: operating_profit
+    related: [Operating Profit, Operating Plan]
+  - term: Profit
+    definition: >-
+      Ambiguous on its own. Summit reports three profit lines: Gross Margin (revenue - COGS), Contribution Margin
+      (gross margin - freight - commission) and Operating Profit (gross margin - all operating expenses). Ask which
+      one is meant. "Net profit" is defined separately (see Net Profit).
+    candidate_metric_ids: [gross_margin, contribution_margin, operating_profit]
+    related: [Margin, Operating Profit, Net Profit]
+    synonyms: [profits, making money, losing money, earnings]
+  - term: Margin Rate
+    definition: >-
+      Margin per dollar of revenue. Ambiguous between Gross Margin %, Contribution Margin % and Operating Margin %;
+      ask which one is meant.
+    candidate_metric_ids: [gross_margin_pct, contribution_margin_pct, operating_margin_pct]
+    related: [Margin]
+    synonyms: [on every dollar, per dollar of sales, margin percentage, margin rate]
+  - term: Volume
+    definition: Ambiguous between Units Sold and Orders; ask which one is meant.
+    candidate_metric_ids: [units, orders]
+    synonyms: [sales volume, business volume]
+  - term: Net Income
+    definition: >-
+      Profit after interest and tax. Not measured in this dataset: interest and tax are held at corporate. The lowest
+      governed profit line is Operating Profit (see Net Profit).
+    not_measured: true
+    synonyms: [net income after tax, after tax profit, after-tax profit, net earnings, profit after tax]
+  - term: Days Sales Outstanding
+    definition: How long customers take to pay. Receivables are not in this dataset.
+    not_measured: true
+    synonyms: [DSO, collection days, days to collect, receivables]
+  - term: Customer Satisfaction
+    definition: Survey-based satisfaction or loyalty scores. Not collected in this dataset.
+    not_measured: true
+    synonyms: [customer satisfaction score, CSAT, NPS, net promoter score, satisfaction score]
+  - term: On-Time Delivery
+    definition: Share of deliveries arriving when promised. Delivery promise and arrival times are not in this dataset.
+    not_measured: true
+    synonyms: [on-time delivery rate, on time delivery, OTIF, delivery performance]
+  - term: Cost per Lead
+    definition: Marketing spend per lead. Marketing spend is not in this dataset.
+    not_measured: true
+    synonyms: [CPL, cost per lead, customer acquisition cost, CAC, marketing spend]
+  - term: Deal Size
+    definition: Average value of won opportunities. Not governed (opportunity amounts are summed as Pipeline Amount only).
+    not_measured: true
+    synonyms: [average deal size, deal size]
+  - term: Employee Turnover
+    definition: Share of employees leaving. Separations are not in this dataset (only headcount is).
+    not_measured: true
+    synonyms: [attrition, staff turnover, employee attrition, turnover rate]
+  - term: Revenue Target
+    definition: >-
+      Monthly revenue quotas per sales rep. FY26 quotas split each branch's FY26 Operating Plan revenue across its
+      reps, so "hitting the revenue target" for FY26 means revenue at or above plan revenue.
+    metric_id: revenue_target
+    related: [Operating Plan, Revenue]
+    synonyms: [revenue quota, sales target, target]
+  - term: Fuel Surcharge
+    definition: >-
+      The carrier fuel surcharge billed on deliveries, recorded on each order separately from base freight.
+      Freight = base freight + fuel surcharge; there is no other freight line.
+    metric_id: fuel_surcharge
+    related: [Operating Expenses, Deliveries]
+    synonyms: [diesel surcharge, fuel surcharges]
+  - term: Labor Cost
+    definition: Branch regular payroll plus overtime. Headcount (FTE) below plan with overtime above plan means open positions covered by overtime.
+    formula: Payroll + Overtime
+    metric_id: labor_cost
+    related: [Headcount, Operating Expenses]
+    synonyms: [labor, labour, staff cost]
   - term: Budget
-    definition: Branch revenue and gross margin budget from the FP&A workbook (budgets.xlsx).
+    definition: >-
+      Branch revenue, gross margin and opex budget from the FP&A workbook (budgets.xlsx). FY26 rows are the branch
+      allocation of the FY26 Operating Plan; FY25 rows are last year's budget.
     metric_id: budget_revenue
-    related: [Forecast, Revenue Target]
+    related: [Operating Plan, Revenue Target]
   - term: COGS
     definition: Cost of goods sold at the product's standard cost in the order month.
     metric_id: cogs
     related: [Gross Margin]
-    synonyms: [cost of goods sold, cost of sales, input costs, unit cost]
+    synonyms: [cost of goods sold, cost of sales, input costs]
+  - term: Unit Cost
+    definition: >-
+      What Summit pays suppliers per unit (product_costs). Across products it is compared per list-price dollar
+      (COGS per List Dollar), because units of different products are not comparable.
+    metric_id: cost_to_list_ratio
+    related: [COGS, Gross Margin]
+    synonyms: [unit costs, supplier cost, input cost inflation]
   - term: Return Rate
     definition: Returned revenue as a share of revenue.
     formula: Returns / Revenue

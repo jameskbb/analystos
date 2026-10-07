@@ -148,7 +148,8 @@ def test_flow1_data_schema_relationships_metrics(api: Any, ws: str, scenarios: d
         "aov",
         "gross_margin_pct",
         "contribution_margin",
-        "operating_margin",
+        "operating_profit",
+        "plan_operating_profit",
     } <= metric_ids
     assert not [i for i in current["issues"] if i["severity"] == "error"]
 
@@ -237,7 +238,7 @@ def test_flow2_margin_with_flat_revenue(api: Any, ws: str, scenarios: dict[str, 
         a["term"].lower(): {c["metric_id"] for c in a["candidates"]}
         for a in inv["interpretation"]["ambiguous"]
     }
-    assert {"gross_margin", "gross_margin_pct", "contribution_margin", "operating_margin"} <= terms["margin"]
+    assert {"gross_margin", "gross_margin_pct", "contribution_margin", "operating_profit"} <= terms["margin"]
     inv = run_question(api, ws, q, choices={"margin": "gross_margin_pct"})
     interp = inv["interpretation"]
     assert interp["window"]["start"] == key["current_period"]["start"]
@@ -287,3 +288,66 @@ def test_rerun_keeps_analyst_decisions(api: Any, ws: str) -> None:
     assert any(
         "not convinced" in (a if isinstance(a, str) else a.get("text", "")) for a in node["annotations"]
     )
+
+
+def test_flagship_operating_profit_against_plan(api: Any, ws: str, scenarios: dict[str, Any]) -> None:
+    """The CEO question end to end: premise against plan, reconciled plan-variance tree, related
+    signal kept apart, analyst confirmation, an operating review from confirmed findings only,
+    the quarterly business review carrying the same, and a rerun with an empty diff."""
+    key = scenarios["stories"]["operating_profit_miss_q2_2026"]
+    inv = run_question(api, ws, key["questions"][0])
+    tree = nodes(inv)
+    by_id = {n["id"]: n for n in tree}
+    root = by_id[inv["tree"]["root_id"]]
+    assert root["metric_id"] == "operating_profit" and root["baseline_label"] == "Plan"
+    assert root["abs_change"] == pytest.approx(key["headline"]["operating_profit_variance"], abs=1.0)
+    premise = next(n for n in tree if n.get("role") == "premise")
+    assert premise["verdict"] == key["premise"]["verdict"] and "premise holds" in premise["notes"]
+    rec = next(n for n in tree if n.get("role") == "reconciliation")
+    assert rec["reconciliation"]["reconciled"] and "reconciled" in rec["notes"]
+    assert inv["related_signals"], "the related signal is listed apart from the tree"
+    signal = inv["related_signals"][0]
+    assert signal["relationship"] == "not_established"
+    components = {c["node_id"] for i in rec["reconciliation"]["identities"] for c in i["components"]}
+    assert signal["node_id"] not in components
+    assert "reconciles exactly" in inv["brief_answer"] and "not establish" in inv["brief_answer"]
+
+    # Accept the explanation and the signal; the review is built from those nodes only.
+    accept = [root["id"], premise["id"], signal["node_id"], *components]
+    for nid in accept:
+        ok(
+            api.post(
+                f"{API}/workspaces/{ws}/investigations/{inv['id']}/nodes/{nid}/actions",
+                json={"action": "confirm"},
+            )
+        )
+    report = ok(
+        api.post(f"{API}/workspaces/{ws}/reports/from-investigation", json={"investigation_id": inv["id"]}),
+        200,
+        201,
+    )
+    review = next(b for b in report["blocks"] if b.get("label") == "Operating review")
+    assert (
+        review["reconciled"] and review["complete"] and "relationship not established" in review["markdown"]
+    )
+    assert review["headline"] and review["causes"] and review["related"]
+    bridge = next(b for b in report["blocks"] if b["type"] == "bridge")
+    assert bridge["reconciled"] and bridge["option"]
+    assert sum(st["amount"] for st in bridge["steps"]) == pytest.approx(bridge["gap"], abs=1.0)
+    assert bridge["gap"] == pytest.approx(key["headline"]["operating_profit_variance"], abs=1.0)
+    assert not [b for b in report["blocks"] if b.get("label") == "Unconfirmed analysis"]
+    assert inv["bridge"]["reconciled"] and inv["brief_lead"]
+    quarterly = ok(
+        api.post(f"{API}/workspaces/{ws}/reports/business-review", json={"period": "Q2 2026"}), 200, 201
+    )
+    assert any(b.get("label") == "Operating review" for b in quarterly["blocks"])
+    kpis = next(b for b in quarterly["blocks"] if b["type"] == "kpi_overview")["items"]
+    revenue = next(k for k in kpis if k["metric_id"] == "revenue")
+    assert revenue["plan"] == pytest.approx(key["headline"]["revenue_plan"], abs=1.0)
+
+    accepted = ok(api.post(f"{API}/workspaces/{ws}/investigations/{inv['id']}/rerun", json={}), 202)
+    wait_job(api, ws, accepted)
+    diff = ok(api.get(f"{API}/workspaces/{ws}/investigations/{inv['id']}/diff"))
+    assert not diff["diff"]["node_changes"] and not diff["diff"]["dataset_version_changes"]
+    after = ok(api.get(f"{API}/workspaces/{ws}/investigations/{inv['id']}"))
+    assert all(n["status"] == "confirmed" for n in nodes(after) if n["id"] in accept)

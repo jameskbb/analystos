@@ -43,7 +43,7 @@ from .base import LLMError, LLMProvider, Message, UsageLog
 from .providers import NullProvider
 from .tools import ToolRegistry, ToolResult, ToolState, default_registry
 from .untrusted import UNTRUSTED_DATA_POLICY, render_untrusted, render_user_request
-from .verifier import EvidenceNumbers, hypothesis_leaks, verify_text
+from .verifier import EvidenceNumbers, causal_leaks, hypothesis_leaks, verify_text
 
 STAGES = (
     "interpret_question",
@@ -127,7 +127,9 @@ _FOLLOWUP_SYSTEM = _BASE_SYSTEM + (
 _NARRATIVE_SYSTEM = _BASE_SYSTEM + (
     " Task: write a brief answer (at most 80 words) to the analyst's question from the investigation tree. "
     "Keep observations, supported explanations and hypotheses distinct; hypotheses must be phrased as "
-    "possibilities. Copy numbers exactly as they appear in the tree."
+    "possibilities. Nodes with relationship 'not_established' are related signals: mention them only as "
+    "signals whose relationship to the change is not established, never as causes. Copy numbers exactly as "
+    "they appear in the tree."
 )
 
 
@@ -142,6 +144,8 @@ def _tree_payload(run: InvestigationRun) -> list[dict[str, Any]]:
                 "statement": n.statement,
                 "statement_type": n.statement_type,
                 "evidence": n.evidence_strength,
+                **({"role": n.role} if n.role else {}),
+                **({"relationship": n.relationship} if n.relationship else {}),
             }
         )
     return out[:120]
@@ -436,8 +440,21 @@ class Orchestrator:
                 check = verify_text(out.narrative, ev)
                 hyps = [n.statement for n in run.investigation.tree.nodes if n.statement_type == "hypothesis"]
                 leaks = hypothesis_leaks(out.narrative, hyps)
-                if check.ok and not leaks:
+                causal = causal_leaks(
+                    out.narrative,
+                    [
+                        n.metric_label or ""
+                        for n in run.investigation.tree.nodes
+                        if n.role == "related_signal"
+                    ],
+                )
+                if check.ok and not leaks and not causal:
                     narrative, nsource = out.narrative, "llm_verified"
+                if causal:
+                    rejected.append(
+                        "narrative rejected: states a related signal (relationship not established) as a cause: "
+                        + "; ".join(causal)
+                    )
                 if not check.ok:
                     rejected.append(
                         "narrative rejected: numbers not found in any artifact: "
@@ -450,7 +467,7 @@ class Orchestrator:
             except LLMError as exc:
                 rejected.append(f"narrative unavailable: {exc}")
         if narrative is None and run.investigation.tree.root_id:
-            narrative = brief_answer(run.investigation.tree)
+            narrative = brief_answer(run.investigation.tree, run.investigation.related_signals)
         record(
             "synthesize_findings",
             "llm" if nsource == "llm_verified" else "deterministic",

@@ -30,13 +30,17 @@ export function formatValue(v: unknown, format?: NumberFormat, opts: { compact?:
   if (n === null) return v === null || v === undefined ? "n/a" : String(v);
   if (opts.compact) return formatCompact(n, format);
   switch (format) {
-    case "currency":
-      return fmt(`cur${opts.digits ?? "a"}`, {
+    case "currency": {
+      // The digits depend on the value, so they are part of the cache key (a formatter cached for a small
+      // value must not print cents on a large one).
+      const digits = opts.digits ?? (Math.abs(n) >= 1000 ? 0 : 2);
+      return fmt(`cur${digits}`, {
         style: "currency",
         currency: "USD",
-        maximumFractionDigits: opts.digits ?? (Math.abs(n) >= 1000 ? 0 : 2),
-        minimumFractionDigits: opts.digits ?? (Math.abs(n) >= 1000 ? 0 : 2),
+        maximumFractionDigits: digits,
+        minimumFractionDigits: digits,
       }).format(n);
+    }
     case "percent":
       return fmt(`pct${opts.digits ?? 1}`, {
         style: "percent",

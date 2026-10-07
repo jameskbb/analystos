@@ -43,6 +43,8 @@ import { formatDateTime, formatShare, formatSignedChange, humanize } from "@/lib
 import { cn } from "@/lib/utils";
 import { ArtifactChart } from "./artifact-chart";
 import { premiseVerdict, type NormNode } from "./model";
+import { PROVISIONAL_NOTE, higherIsBetterFor, isRelatedSignal, labelWithoutUnit, relationshipLabel, valueLabels } from "./answer";
+import { ReconciliationView } from "./reconciliation-view";
 
 type Action = "drill" | "reject" | "annotate" | "modify" | null;
 
@@ -259,9 +261,17 @@ export function NodeDetail({
   onExpandAll,
   canEdit,
   parentFormat = null,
+  root = null,
+  onSelectNode,
+  provisional = false,
 }: {
+  /** A related signal measured on cohorts that are still maturing. */
+  provisional?: boolean;
   /** Number format of the parent node's metric: contribution effects are in the parent's units. */
   parentFormat?: string | null;
+  /** The tree's root, for effects on the root metric and the related-signal wording. */
+  root?: NormNode | null;
+  onSelectNode?: (id: string) => void;
   investigation: Investigation;
   node: NormNode;
   artifacts: ArtifactRecord[];
@@ -346,13 +356,16 @@ export function NodeDetail({
   const fmt = node.format;
   const segPath = node.segment_path?.length ? node.segment_path : node.segment ? [node.segment] : [];
   const childDims = segPath.map((s) => s.dimension);
+  const labels = valueLabels(node);
+  const signal = isRelatedSignal(node);
+  const rootLabel = root?.metric_label ?? root?.metric_id ?? null;
 
   return (
     <div className="flex flex-col gap-4 p-4">
       <div className="flex flex-col gap-2">
         <div className="flex flex-wrap items-center gap-1.5 text-xs text-fg-subtle">
           <StatusBadge status={node.status} />
-          {node.metric_label || node.metric_id ? <span>{node.metric_label ?? humanize(node.metric_id)}</span> : null}
+          {node.metric_label || node.metric_id ? <span>{labelWithoutUnit(node.metric_label ?? humanize(node.metric_id), node.metric_unit)}</span> : null}
           {segPath.length ? <span>· {segPath.map((s) => `${humanize(s.dimension)} = ${s.value ?? "(null)"}`).join(" › ")}</span> : null}
           {node.finding_id ? (
             <Link href={href(`/findings/${node.finding_id}`)} className="inline-flex items-center gap-1 text-accent hover:underline">
@@ -360,9 +373,25 @@ export function NodeDetail({
             </Link>
           ) : null}
         </div>
+        {node.title ? <h2 className="text-base font-semibold">{node.title}</h2> : null}
         <Statement type={node.statement_type} size="lg">
           {node.statement}
         </Statement>
+        {node.offset_node_id && onSelectNode ? (
+          <button type="button" className="self-start text-xs text-accent hover:underline" onClick={() => onSelectNode(node.offset_node_id!)} data-testid="offset-link">
+            See the offsetting line in the same segment
+          </button>
+        ) : null}
+        {signal ? (
+          <div role="note" aria-label="Related signal" className="rounded border border-border-strong bg-bg-subtle px-2.5 py-1.5 text-xs">
+            <p className="font-medium">{relationshipLabel(root)}.</p>
+            <p className="mt-0.5 text-fg-muted">
+              A verified observation in a segment where the explanation concentrates. The data does not establish it as a cause, so it is not
+              part of the reconciled explanation.
+            </p>
+            {provisional ? <p className="mt-1 text-warning" data-testid="provisional-note">{PROVISIONAL_NOTE}</p> : null}
+          </div>
+        ) : null}
         {premiseVerdict(node) ? (
           <p
             role="note"
@@ -393,21 +422,36 @@ export function NodeDetail({
 
       {node.current !== null && node.current !== undefined ? (
         <div className="grid grid-cols-2 gap-x-6 gap-y-3 rounded-md border border-border px-4 py-3 sm:grid-cols-4">
-          <Kpi label="Current" value={node.current} format={fmt} size="sm" />
-          <Kpi label="Baseline" value={node.baseline} format={fmt} size="sm" />
+          <Kpi label={node.metric_unit ? `${labels.current} (${node.metric_unit})` : labels.current} value={node.current} format={fmt} size="sm" />
+          <Kpi label={node.metric_unit ? `${labels.baseline} (${node.metric_unit})` : labels.baseline} value={node.baseline} format={fmt} size="sm" />
           <div className="flex flex-col gap-0.5">
-            <div className="text-xs text-fg-subtle">Change</div>
-            <ChangeValue pct={node.pct_change} abs={node.abs_change} format={fmt} className="text-sm" />
+            <div className="text-xs text-fg-subtle">{labels.change}</div>
+            <ChangeValue pct={node.pct_change} abs={node.abs_change} format={fmt} className="text-sm" higherIsBetter={higherIsBetterFor(node)} />
           </div>
-          <div className="flex flex-col gap-0.5">
-            <div className="text-xs text-fg-subtle">Share of parent change</div>
-            <div className="text-lg font-semibold tabular">{node.share !== null ? formatShare(node.share) : "n/a"}</div>
-            {node.contribution && node.contribution.effect ? (
-              <div className="text-2xs text-fg-subtle tabular">
-                effect on parent {formatSignedChange(node.contribution.effect, parentFormat ?? fmt)}
-              </div>
-            ) : null}
-          </div>
+          {node.root_effect !== null && node.root_effect !== undefined && root && root.id !== node.id ? (
+            <div className="flex flex-col gap-0.5">
+              <div className="text-xs text-fg-subtle">Effect on {rootLabel}</div>
+              <div className="text-lg font-semibold tabular">{formatSignedChange(node.root_effect, root.format)}</div>
+              {node.share !== null ? <div className="text-2xs text-fg-subtle tabular">{formatShare(node.share)} of the parent&apos;s gap</div> : null}
+            </div>
+          ) : !node.parent_id || signal ? null : (
+            <div className="flex flex-col gap-0.5">
+              <div className="text-xs text-fg-subtle">Share of parent change</div>
+              <div className="text-lg font-semibold tabular">{node.share !== null ? formatShare(node.share) : "n/a"}</div>
+              {node.contribution && node.contribution.effect ? (
+                <div className="text-2xs text-fg-subtle tabular">
+                  effect on parent {formatSignedChange(node.contribution.effect, parentFormat ?? fmt)}
+                </div>
+              ) : null}
+            </div>
+          )}
+        </div>
+      ) : null}
+
+      {node.reconciliation ? (
+        <div className="rounded-md border border-border px-4 py-3">
+          <SectionLabel className="mb-1.5">Does the explanation add back to the gap?</SectionLabel>
+          <ReconciliationView reconciliation={node.reconciliation} onSelect={onSelectNode} />
         </div>
       ) : null}
 

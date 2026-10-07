@@ -13,10 +13,12 @@ def _is_bad(value: float | None) -> bool:
     return value is None or (isinstance(value, float) and (math.isnan(value) or math.isinf(value)))
 
 
-def fmt_value(value: float | None, fmt: str | None) -> str:
+def fmt_value(value: float | None, fmt: str | None, unit: str | None = None) -> str:
     if _is_bad(value):
         return "n/a"
     assert value is not None
+    if unit and fmt in (None, "number", "integer"):
+        return f"{value:,.0f} {unit}" if fmt == "integer" else f"{value:,.1f} {unit}"
     if fmt == "percent":
         return f"{value * 100:.1f}%"
     if fmt == "currency":

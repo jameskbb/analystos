@@ -297,6 +297,54 @@ _HEDGES = (
 )
 
 
+_CAUSAL = re.compile(
+    r"\b(because|caused|causes|causing|cause of|due to|drove|drives|driven by|driving|led to|leads to|"
+    r"resulted in|results in|explains|explained|responsible for|contributed to|contributing to|behind|"
+    r"reason for|reason why|as a result|which hurt|which cut|which lowered|which reduced)\b"
+)
+_NOT_CAUSAL = (
+    "not established",
+    "does not establish",
+    "do not establish",
+    "not shown",
+    "not proven",
+    "no evidence",
+    "cannot establish",
+    "can't establish",
+    "not a cause",
+    "not the cause",
+    "unproven",
+    "coincid",
+    "correlat",
+    "not tested",
+)
+
+
+def causal_leaks(text: str, signals: Iterable[str]) -> list[str]:
+    """Related signals that ``text`` states as causes.
+
+    ``signals`` are the metric names of related signals (observations whose relationship to
+    the explained change is not established). A sentence that mentions one of them together
+    with causal wording ("because", "drove", "led to") and without a disclaimer ("not
+    established", "no evidence") turns correlation into explanation and is rejected.
+    """
+    leaks: list[str] = []
+    sentences = re.split(r"(?<=[.;!?])\s+", text.lower())
+    for name in signals:
+        needle = name.lower().strip()
+        if not needle:
+            continue
+        for sentence in sentences:
+            if (
+                needle in sentence
+                and _CAUSAL.search(sentence)
+                and not any(h in sentence for h in _NOT_CAUSAL)
+            ):
+                leaks.append(name)
+                break
+    return leaks
+
+
 def hypothesis_leaks(text: str, hypotheses: Iterable[str]) -> list[str]:
     """Hypotheses whose topic appears in ``text`` without any hedging nearby.
 

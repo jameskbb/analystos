@@ -13,11 +13,11 @@ import { Kbd } from "@/components/ui/kbd";
 import { cn } from "@/lib/utils";
 
 export const EXAMPLE_QUESTIONS = [
+  "We made our sales number last quarter, but we missed our target for net profit. What happened?",
   "Why was August revenue down?",
   "Revenue was roughly flat. Why did margin decline?",
   "Which region drove the change in revenue last month?",
   "Why did conversion rate fall in Q3?",
-  "What caused the forecast miss in August?",
 ];
 
 /**

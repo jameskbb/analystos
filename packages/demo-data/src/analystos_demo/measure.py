@@ -69,8 +69,11 @@ def connect(data_dir: str | Path) -> duckdb.DuckDBPyConnection:
         "orders",
         "targets",
         "leads",
-        "revenue_forecast",
         "operating_expenses",
+        "product_categories",
+        "suppliers",
+        "sales_plan",
+        "opex_plan",
     ):
         con.execute(f"CREATE VIEW {t} AS SELECT * FROM read_csv('{_q(d / (t + '.csv'))}', {csv_opts})")
     con.execute(
@@ -104,12 +107,14 @@ def connect(data_dir: str | Path) -> duckdb.DuckDBPyConnection:
         )
         SELECT l.order_line_id, l.order_id, o.order_date, o.channel, o.customer_id, c.customer_name, c.segment,
                o.branch_id, b.branch_name, b.region, l.product_id, p.category, p.tier, p.product_name,
+               sup.supplier_name AS supplier,
                l.quantity, l.gross_amount, l.discount_amount, l.net_amount, l.cost_amount, l.commission_amount
         FROM order_lines l
         JOIN orders o ON o.order_id = l.order_id
         JOIN cust c ON c.customer_id = o.customer_id
         JOIN branches b ON b.branch_id = o.branch_id
         JOIN products p ON p.product_id = l.product_id
+        JOIN suppliers sup ON sup.supplier_id = p.supplier_id
         WHERE o.status <> 'cancelled'
         """
     )
@@ -213,6 +218,584 @@ def _by(
 def _month_bounds(label: str) -> tuple[str, str]:
     p = pd.Period(label, freq="M")
     return p.start_time.date().isoformat(), p.end_time.date().isoformat()
+
+
+_OPEX_LINE_SOURCES = (  # metric id, plan metric id, (actual SQL, plan SQL) over [start, end]
+    (
+        "freight_cost",
+        "plan_freight_cost",
+        "SELECT SUM(freight_cost) FROM orders WHERE status <> 'cancelled' AND order_date BETWEEN ?::DATE AND ?::DATE",
+        "SELECT SUM(plan_freight_cost) FROM opex_plan WHERE plan_month BETWEEN ?::DATE AND ?::DATE",
+    ),
+    (
+        "sales_commission",
+        "plan_sales_commission",
+        "SELECT SUM(commission_amount) FROM gt_sales WHERE order_date BETWEEN ?::DATE AND ?::DATE",
+        "SELECT SUM(plan_sales_commission) FROM sales_plan WHERE plan_month BETWEEN ?::DATE AND ?::DATE",
+    ),
+    *(
+        (
+            line,
+            f"plan_{line}",
+            f"SELECT SUM({line}) FROM operating_expenses WHERE expense_month BETWEEN ?::DATE AND ?::DATE",
+            f"SELECT SUM(plan_{line}) FROM opex_plan WHERE plan_month BETWEEN ?::DATE AND ?::DATE",
+        )
+        for line in ("payroll", "overtime", "occupancy", "other_opex")
+    ),
+)
+
+
+def _scalar(con: duckdb.DuckDBPyConnection, sql: str, params: list[Any]) -> float:
+    row = con.execute(sql, params).fetchone()
+    return float(row[0] or 0.0) if row else 0.0
+
+
+def _bridge_cells(con: duckdb.DuckDBPyConnection, start: str, end: str) -> list[dict[str, Any]]:
+    """Actual and plan per (category, segment, region) cell over [start, end], with the effects.
+
+    Both effects are measured per list-price dollar (A_gross is actual quantity x list price):
+    unit_cost_effect = A_gross * (P_cogs / P_gross - A_cogs / A_gross)
+    discount_effect  = A_gross * (A_rev / A_gross - P_rev / P_gross)
+    Units are not a common measure inside a category (a stud and a beam are one unit each), so
+    cost per unit would move on product mix alone; cost per list dollar moves on cost changes.
+    A cell missing on either side contributes nothing to either effect (it lands in mix).
+    """
+    rows = _rows(
+        con,
+        """
+        WITH a AS (
+            SELECT category, segment, region, SUM(quantity) AS a_units, SUM(gross_amount) AS a_gross,
+                   SUM(net_amount) AS a_rev, SUM(cost_amount) AS a_cogs
+            FROM gt_sales WHERE order_date BETWEEN ?::DATE AND ?::DATE GROUP BY ALL
+        ), p AS (
+            SELECT category, segment, region, SUM(plan_units) AS p_units, SUM(plan_gross_revenue) AS p_gross,
+                   SUM(plan_revenue) AS p_rev, SUM(plan_cogs) AS p_cogs
+            FROM sales_plan WHERE plan_month BETWEEN ?::DATE AND ?::DATE GROUP BY ALL
+        )
+        SELECT category, segment, region,
+               COALESCE(a_units, 0) AS a_units, COALESCE(a_gross, 0) AS a_gross,
+               COALESCE(a_rev, 0) AS a_rev, COALESCE(a_cogs, 0) AS a_cogs,
+               COALESCE(p_units, 0) AS p_units, COALESCE(p_gross, 0) AS p_gross,
+               COALESCE(p_rev, 0) AS p_rev, COALESCE(p_cogs, 0) AS p_cogs
+        FROM a FULL OUTER JOIN p USING (category, segment, region)
+        ORDER BY category, segment, region
+        """,
+        [start, end, start, end],
+    )
+    for c in rows:
+        for k in list(c):
+            if k.startswith(("a_", "p_")):
+                c[k] = float(c[k])
+        both = c["a_gross"] != 0 and c["p_gross"] != 0
+        c["unit_cost_effect"] = c["a_gross"] * c["p_cogs"] / c["p_gross"] - c["a_cogs"] if both else 0.0
+        c["discount_effect"] = c["a_rev"] - c["a_gross"] * c["p_rev"] / c["p_gross"] if both else 0.0
+        c["gm_variance"] = (c["a_rev"] - c["a_cogs"]) - (c["p_rev"] - c["p_cogs"])
+    return rows
+
+
+def _supplier_cost_effects(
+    con: duckdb.DuckDBPyConnection, start: str, end: str, category: str
+) -> list[dict[str, Any]]:
+    """Split one category's unit-cost effect by supplier, below the plan grain.
+
+    The plan has no supplier, so each supplier's plan cost per list dollar in a plan cell is its
+    own prior-year rate (same months a year earlier) scaled by the cell's planned change:
+        P_rate_s = PY_rate_s * P_rate_cell / PY_rate_cell
+        effect_s = sum over the category's cells of (A_gross_s * P_rate_s - A_cogs_s)
+    Costing every supplier at the cell's blended plan rate instead would book the suppliers'
+    standing cost-ratio differences as cost changes. The remainder, sum of A_gross_s * (P_rate_cell -
+    P_rate_s), is the shift in supplier mix inside cells; the rows plus `supplier_mix` add exactly to
+    the category's unit-cost effect. A supplier with no prior-year sales in a cell uses the cell rate.
+    """
+    py = [(pd.Timestamp(d) - pd.DateOffset(years=1)).date().isoformat() for d in (start, end)]
+    rows = _rows(
+        con,
+        """
+        WITH p AS (
+            SELECT category, segment, region, SUM(plan_cogs) / SUM(plan_gross_revenue) AS rate
+            FROM sales_plan WHERE plan_month BETWEEN ?::DATE AND ?::DATE AND category = ? GROUP BY ALL
+        ), py_cell AS (
+            SELECT category, segment, region, SUM(cost_amount) / SUM(gross_amount) AS rate
+            FROM gt_sales WHERE order_date BETWEEN ?::DATE AND ?::DATE AND category = ? GROUP BY ALL
+        ), py_sup AS (
+            SELECT category, segment, region, supplier, SUM(cost_amount) / SUM(gross_amount) AS rate
+            FROM gt_sales WHERE order_date BETWEEN ?::DATE AND ?::DATE AND category = ? GROUP BY ALL
+        ), a AS (
+            SELECT category, segment, region, supplier, SUM(gross_amount) AS g, SUM(cost_amount) AS c
+            FROM gt_sales WHERE order_date BETWEEN ?::DATE AND ?::DATE AND category = ? GROUP BY ALL
+        )
+        SELECT a.supplier,
+               SUM(a.g * p.rate * COALESCE(py_sup.rate / py_cell.rate, 1)) - SUM(a.c) AS effect,
+               SUM(a.g * p.rate) - SUM(a.g * p.rate * COALESCE(py_sup.rate / py_cell.rate, 1)) AS mix,
+               SUM(a.c) / SUM(a.g * p.rate * COALESCE(py_sup.rate / py_cell.rate, 1)) - 1 AS cost_vs_plan_pct,
+               SUM(a.c) AS cogs
+        FROM a JOIN p USING (category, segment, region)
+        LEFT JOIN py_cell USING (category, segment, region)
+        LEFT JOIN py_sup USING (category, segment, region, supplier)
+        GROUP BY 1 ORDER BY 2
+        """,
+        [start, end, category, *py, category, *py, category, start, end, category],
+    )
+    total = sum(float(r["effect"]) for r in rows) + sum(float(r["mix"]) for r in rows)
+    out: list[dict[str, Any]] = [
+        {
+            "supplier": r["supplier"],
+            "effect": _r(r["effect"]),
+            "share": _r(float(r["effect"]) / total, 4) if total else None,
+            "cost_vs_plan_pct": _r(r["cost_vs_plan_pct"], 5),
+            "cogs": _r(r["cogs"]),
+        }
+        for r in rows
+    ]
+    mix = sum(float(r["mix"]) for r in rows)
+    out.append(
+        {"supplier": "supplier_mix", "effect": _r(mix), "share": _r(mix / total, 4) if total else None}
+    )
+    return out
+
+
+def _freight_split(con: duckdb.DuckDBPyConnection, w: list[Any]) -> dict[str, Any]:
+    a = _one(
+        con,
+        """
+        SELECT SUM(base_freight) AS base, SUM(fuel_surcharge) AS fuel, SUM(freight_cost) AS total,
+               COUNT(DISTINCT order_id) FILTER (WHERE channel <> 'Counter') AS deliveries
+        FROM orders WHERE status <> 'cancelled' AND order_date BETWEEN ?::DATE AND ?::DATE
+        """,
+        w,
+    )
+    p = _one(
+        con,
+        """
+        SELECT SUM(plan_base_freight) AS base, SUM(plan_fuel_surcharge) AS fuel, SUM(plan_freight_cost) AS total,
+               SUM(plan_deliveries) AS deliveries
+        FROM opex_plan WHERE plan_month BETWEEN ?::DATE AND ?::DATE
+        """,
+        w,
+    )
+
+    def part(k: str) -> dict[str, Any]:
+        av, pv = float(a[k] or 0), float(p[k] or 0)
+        return {"actual": _r(av), "plan": _r(pv), "variance": _r(av - pv), "variance_pct": _pct(av, pv)}
+
+    overrun = float(a["total"]) - float(p["total"])
+    return {
+        "base_freight": part("base"),
+        "fuel_surcharge": part("fuel"),
+        "freight_cost": part("total"),
+        "deliveries": {
+            "actual": int(a["deliveries"]),
+            "plan": int(p["deliveries"]),
+            "variance_pct": _pct(float(a["deliveries"]), float(p["deliveries"])),
+        },
+        "fuel_surcharge_share_of_overrun": _r((float(a["fuel"]) - float(p["fuel"])) / overrun, 4)
+        if overrun
+        else None,
+        "fuel_surcharge_rate_actual": _r(float(a["fuel"]) / float(a["base"]), 4),
+        "fuel_surcharge_rate_plan": _r(float(p["fuel"]) / float(p["base"]), 4),
+    }
+
+
+def _labor(con: duckdb.DuckDBPyConnection, w: list[Any]) -> dict[str, Any]:
+    """Payroll and overtime vs plan, with average monthly headcount, in total and by branch."""
+    rows = _rows(
+        con,
+        """
+        WITH a AS (
+            SELECT branch_id, SUM(payroll) AS payroll, SUM(overtime) AS overtime,
+                   SUM(headcount) / COUNT(DISTINCT expense_month) AS headcount
+            FROM operating_expenses WHERE expense_month BETWEEN ?::DATE AND ?::DATE GROUP BY 1
+        ), p AS (
+            SELECT branch_id, SUM(plan_payroll) AS payroll, SUM(plan_overtime) AS overtime,
+                   SUM(plan_headcount) / COUNT(DISTINCT plan_month) AS headcount
+            FROM opex_plan WHERE plan_month BETWEEN ?::DATE AND ?::DATE GROUP BY 1
+        )
+        SELECT b.branch_name AS branch, b.region,
+               a.payroll AS a_payroll, p.payroll AS p_payroll, a.overtime AS a_overtime, p.overtime AS p_overtime,
+               a.headcount AS a_headcount, p.headcount AS p_headcount
+        FROM p JOIN branches b USING (branch_id) LEFT JOIN a USING (branch_id)
+        """,
+        [*w, *w],
+    )
+    by_branch = []
+    for r in rows:
+        pay = float(r["a_payroll"] or 0) - float(r["p_payroll"])
+        ot = float(r["a_overtime"] or 0) - float(r["p_overtime"])
+        by_branch.append(
+            {
+                "branch": r["branch"],
+                "region": r["region"],
+                "payroll_variance": _r(pay),
+                "overtime_variance": _r(ot),
+                "labor_variance": _r(pay + ot),
+                "headcount_actual": _r(r["a_headcount"], 2),
+                "headcount_plan": _r(r["p_headcount"], 2),
+                "headcount_variance": _r(float(r["a_headcount"] or 0) - float(r["p_headcount"]), 2),
+            }
+        )
+    by_branch.sort(key=lambda x: -x["labor_variance"])
+
+    def tot(k: str) -> float:
+        return sum(float(r[k] or 0) for r in rows)
+
+    months = 3
+    return {
+        "payroll": {
+            "actual": _r(tot("a_payroll")),
+            "plan": _r(tot("p_payroll")),
+            "variance": _r(tot("a_payroll") - tot("p_payroll")),
+        },
+        "overtime": {
+            "actual": _r(tot("a_overtime")),
+            "plan": _r(tot("p_overtime")),
+            "variance": _r(tot("a_overtime") - tot("p_overtime")),
+        },
+        "labor_cost": {
+            "actual": _r(tot("a_payroll") + tot("a_overtime")),
+            "plan": _r(tot("p_payroll") + tot("p_overtime")),
+            "variance": _r(tot("a_payroll") + tot("a_overtime") - tot("p_payroll") - tot("p_overtime")),
+        },
+        "headcount": {
+            "actual": _r(tot("a_headcount"), 2),
+            "plan": _r(tot("p_headcount"), 2),
+            "variance": _r(tot("a_headcount") - tot("p_headcount"), 2),
+            "note": f"average monthly FTE over the {months} months",
+        },
+        "by_branch": by_branch,
+    }
+
+
+def _roll(cells: list[dict[str, Any]], keys: tuple[str, ...], measure: str) -> list[dict[str, Any]]:
+    agg: dict[tuple[Any, ...], float] = {}
+    for c in cells:
+        k = tuple(c[x] for x in keys)
+        agg[k] = agg.get(k, 0.0) + c[measure]
+    total = sum(agg.values())
+    out = [
+        {**dict(zip(keys, k, strict=True)), "effect": _r(v), "share": _r(v / total, 4) if total else None}
+        for k, v in agg.items()
+    ]
+    return sorted(out, key=lambda x: x["effect"])
+
+
+def _vs_plan(
+    con: duckdb.DuckDBPyConnection, actual_sql: str, plan_sql: str, params: list[Any], key: str
+) -> list[dict[str, Any]]:
+    """Actual vs plan by one or more keys (both queries return key columns then a value)."""
+    a = {tuple(r[:-1]): float(r[-1] or 0) for r in con.execute(actual_sql, params).fetchall()}
+    p = {tuple(r[:-1]): float(r[-1] or 0) for r in con.execute(plan_sql, params).fetchall()}
+    names = key.split(",")
+    out = []
+    for k in sorted(set(a) | set(p)):
+        av, pv = a.get(k, 0.0), p.get(k, 0.0)
+        out.append(
+            {
+                **dict(zip(names, k, strict=True)),
+                "actual": _r(av),
+                "plan": _r(pv),
+                "variance": _r(av - pv),
+                "variance_pct": _pct(av, pv) if pv else None,
+            }
+        )
+    return sorted(out, key=lambda x: x["variance"])
+
+
+def _operating_profit_story(con) -> dict[str, Any]:
+    start, end = st.Q2_2026
+    w = [start, end]
+    rev_a = _scalar(
+        con, "SELECT SUM(net_amount) FROM gt_sales WHERE order_date BETWEEN ?::DATE AND ?::DATE", w
+    )
+    rev_p = _scalar(
+        con, "SELECT SUM(plan_revenue) FROM sales_plan WHERE plan_month BETWEEN ?::DATE AND ?::DATE", w
+    )
+    cogs_a = _scalar(
+        con, "SELECT SUM(cost_amount) FROM gt_sales WHERE order_date BETWEEN ?::DATE AND ?::DATE", w
+    )
+    cogs_p = _scalar(
+        con, "SELECT SUM(plan_cogs) FROM sales_plan WHERE plan_month BETWEEN ?::DATE AND ?::DATE", w
+    )
+    target = _scalar(
+        con, "SELECT SUM(revenue_target) FROM targets WHERE target_month BETWEEN ?::DATE AND ?::DATE", w
+    )
+    budget = _scalar(
+        con,
+        "SELECT SUM(revenue_budget) FROM budgets_branch WHERE budget_month BETWEEN ?::DATE AND ?::DATE",
+        w,
+    )
+    gm_a, gm_p = rev_a - cogs_a, rev_p - cogs_p
+    lines: list[dict[str, Any]] = []
+    opex_a = opex_p = 0.0
+    for metric, plan_metric, a_sql, p_sql in _OPEX_LINE_SOURCES:
+        a, p = _scalar(con, a_sql, w), _scalar(con, p_sql, w)
+        opex_a, opex_p = opex_a + a, opex_p + p
+        lines.append(
+            {
+                "metric": metric,
+                "plan_metric": plan_metric,
+                "actual": _r(a),
+                "plan": _r(p),
+                "variance": _r(a - p),
+                "effect_on_operating_profit": _r(p - a),
+            }
+        )
+    lines.sort(key=lambda x: x["effect_on_operating_profit"])
+    op_a, op_p = gm_a - opex_a, gm_p - opex_p
+    op_gap = op_a - op_p
+    gm_gap, opex_effect = gm_a - gm_p, opex_p - opex_a
+
+    cells = _bridge_cells(con, start, end)
+    cost = sum(c["unit_cost_effect"] for c in cells)
+    disc = sum(c["discount_effect"] for c in cells)
+    mix = gm_gap - cost - disc
+    contractor = [c for c in cells if c["segment"] == "Contractor"]
+    cat_cost = _roll(cells, ("category",), "unit_cost_effect")
+    for row in cat_cost:
+        sel = [c for c in cells if c["category"] == row["category"]]
+        at_plan = sum(c["a_gross"] * c["p_cogs"] / c["p_gross"] for c in sel if c["a_gross"] and c["p_gross"])
+        actual = sum(c["a_cogs"] for c in sel if c["a_gross"] and c["p_gross"])
+        row["unit_cost_vs_plan_pct"] = _pct(actual, at_plan) if at_plan else None
+    seg_rates = _rows(
+        con,
+        """
+        WITH a AS (SELECT segment, SUM(discount_amount) / SUM(gross_amount) AS rate FROM gt_sales
+                   WHERE order_date BETWEEN ?::DATE AND ?::DATE GROUP BY 1),
+             p AS (SELECT segment, SUM(plan_discount_amount) / SUM(plan_gross_revenue) AS rate FROM sales_plan
+                   WHERE plan_month BETWEEN ?::DATE AND ?::DATE GROUP BY 1)
+        SELECT segment, a.rate AS actual, p.rate AS plan FROM a JOIN p USING (segment) ORDER BY 1
+        """,
+        [*w, *w],
+    )
+    region_seg = (
+        "SELECT region, segment, SUM(net_amount) FROM gt_sales WHERE order_date BETWEEN ?::DATE AND ?::DATE "
+        "GROUP BY ALL",
+        "SELECT region, segment, SUM(plan_revenue) FROM sales_plan WHERE plan_month BETWEEN ?::DATE AND ?::DATE "
+        "GROUP BY ALL",
+    )
+    by_segment = _vs_plan(
+        con,
+        "SELECT segment, SUM(net_amount) FROM gt_sales WHERE order_date BETWEEN ?::DATE AND ?::DATE GROUP BY 1",
+        "SELECT segment, SUM(plan_revenue) FROM sales_plan WHERE plan_month BETWEEN ?::DATE AND ?::DATE GROUP BY 1",
+        w,
+        "segment",
+    )
+    overtime_by_branch = _vs_plan(
+        con,
+        "SELECT b.branch_name, SUM(x.overtime) FROM operating_expenses x JOIN branches b USING (branch_id) "
+        "WHERE x.expense_month BETWEEN ?::DATE AND ?::DATE GROUP BY 1",
+        "SELECT b.branch_name, SUM(x.plan_overtime) FROM opex_plan x JOIN branches b USING (branch_id) "
+        "WHERE x.plan_month BETWEEN ?::DATE AND ?::DATE GROUP BY 1",
+        w,
+        "branch",
+    )
+    overtime_by_region = _vs_plan(
+        con,
+        "SELECT b.region, SUM(x.overtime) FROM operating_expenses x JOIN branches b USING (branch_id) "
+        "WHERE x.expense_month BETWEEN ?::DATE AND ?::DATE GROUP BY 1",
+        "SELECT b.region, SUM(x.plan_overtime) FROM opex_plan x JOIN branches b USING (branch_id) "
+        "WHERE x.plan_month BETWEEN ?::DATE AND ?::DATE GROUP BY 1",
+        w,
+        "region",
+    )
+    freight_by_region = _vs_plan(
+        con,
+        "SELECT b.region, SUM(o.freight_cost) FROM orders o JOIN branches b USING (branch_id) "
+        "WHERE o.status <> 'cancelled' AND o.order_date BETWEEN ?::DATE AND ?::DATE GROUP BY 1",
+        "SELECT b.region, SUM(x.plan_freight_cost) FROM opex_plan x JOIN branches b USING (branch_id) "
+        "WHERE x.plan_month BETWEEN ?::DATE AND ?::DATE GROUP BY 1",
+        w,
+        "region",
+    )
+    q1 = ["2026-01-01", "2026-03-31"]
+    signal = _one(
+        con,
+        """
+        SELECT SUM(is_converted) FILTER (WHERE created_date BETWEEN ?::DATE AND ?::DATE)
+                 / COUNT(*) FILTER (WHERE created_date BETWEEN ?::DATE AND ?::DATE) AS rate_cur,
+               SUM(is_converted) FILTER (WHERE created_date BETWEEN ?::DATE AND ?::DATE)
+                 / COUNT(*) FILTER (WHERE created_date BETWEEN ?::DATE AND ?::DATE) AS rate_base,
+               MEDIAN(first_response_hours) FILTER (WHERE created_date BETWEEN ?::DATE AND ?::DATE) AS resp_cur,
+               MEDIAN(first_response_hours) FILTER (WHERE created_date BETWEEN ?::DATE AND ?::DATE) AS resp_base,
+               COUNT(*) FILTER (WHERE created_date BETWEEN ?::DATE AND ?::DATE) AS leads_cur,
+               COUNT(*) FILTER (WHERE created_date BETWEEN ?::DATE AND ?::DATE) AS leads_base
+        FROM leads WHERE region = ? AND channel = ?
+        """,
+        [*w, *w, *q1, *q1, *w, *q1, *w, *q1, st.CONVERSION_STORY_REGION, st.CONVERSION_STORY_CHANNEL],
+    )
+    disc_regions = _roll(contractor, ("region",), "discount_effect")
+    top_cost = cat_cost[0]["category"] if cat_cost else None
+    return {
+        "id": "operating_profit_miss_q2_2026",
+        "title": "Revenue on plan, operating profit well below plan (Q2 2026 vs the FY26 Operating Plan)",
+        "questions": [
+            "We made our sales number last quarter, but we missed our target for net profit. What happened?",
+            "We hit our revenue target last quarter, but operating profit missed plan badly. What happened?",
+            "Why did operating profit miss plan in Q2 2026?",
+            "Operating profit vs plan last quarter: what explains the gap?",
+        ],
+        "metric": "operating_profit",
+        "plan_metric": "plan_operating_profit",
+        "comparison": "actual_vs_plan",
+        "plan_version": st.PLAN_VERSION,
+        "current_period": {"start": start, "end": end},
+        "headline": {
+            "revenue_actual": _r(rev_a),
+            "revenue_plan": _r(rev_p),
+            "revenue_variance": _r(rev_a - rev_p),
+            "revenue_variance_pct": _pct(rev_a, rev_p),
+            "operating_profit_actual": _r(op_a),
+            "operating_profit_plan": _r(op_p),
+            "operating_profit_variance": _r(op_gap),
+            "operating_profit_variance_pct": _pct(op_a, op_p),
+            "operating_margin_pct_actual": _r(op_a / rev_a, 5),
+            "operating_margin_pct_plan": _r(op_p / rev_p, 5),
+        },
+        "premise": {
+            "statement": "We made our sales number",
+            "metric": "revenue",
+            "plan_metric": "plan_revenue",
+            "actual": _r(rev_a),
+            "plan": _r(rev_p),
+            "variance_pct": _pct(rev_a, rev_p),
+            "verdict": "supported" if rev_a >= rev_p * (1 - 0.01) else "contradicted",
+            "rule": "supported when actual revenue is at or above plan, or within 1% below it",
+            "revenue_target": _r(target),
+            "budget_revenue": _r(budget),
+            "note": "FY26 rep quotas (targets) and branch budgets allocate the same plan revenue",
+        },
+        "bridge": {
+            "method": "Operating Profit = Gross Margin - Operating Expenses; variance = actual - plan",
+            "gross_margin": {
+                "actual": _r(gm_a),
+                "plan": _r(gm_p),
+                "variance": _r(gm_gap),
+                "share_of_gap": _r(gm_gap / op_gap, 4),
+            },
+            "operating_expenses": {
+                "actual": _r(opex_a),
+                "plan": _r(opex_p),
+                "variance": _r(opex_a - opex_p),
+                "effect_on_operating_profit": _r(opex_effect),
+                "share_of_gap": _r(opex_effect / op_gap, 4),
+            },
+            "reconciles": abs(op_gap - (gm_gap + opex_effect)) < 0.01,
+            "residual": _r(op_gap - (gm_gap + opex_effect)),
+        },
+        "gross_margin_bridge": {
+            "method": "Counterfactuals per (category, segment, region) cell over the quarter, per list-price "
+            "dollar: unit cost effect = actual list revenue x (plan COGS/list - actual COGS/list); discount "
+            "effect = actual list revenue x (actual net/list - plan net/list); mix, volume and other = gross "
+            "margin variance minus both.",
+            "grain": ["category", "segment", "region"],
+            "unit_cost_effect": _r(cost),
+            "discount_effect": _r(disc),
+            "mix_effect": _r(mix),
+            "total": _r(gm_gap),
+            "reconciles": abs(gm_gap - (cost + disc + mix)) < 0.01,
+        },
+        "unit_cost_effect_by_category": cat_cost,
+        "discount_effect_by_segment": _roll(cells, ("segment",), "discount_effect"),
+        "discount_effect_by_region": _roll(cells, ("region",), "discount_effect"),
+        "contractor_discount_effect_by_region": disc_regions,
+        "discount_rate_by_segment": [
+            {
+                "segment": s["segment"],
+                "actual": _r(s["actual"], 5),
+                "plan": _r(s["plan"], 5),
+                "change_pp": _r((s["actual"] - s["plan"]) * 100, 3),
+            }
+            for s in seg_rates
+        ],
+        "revenue_by_segment": by_segment,
+        "revenue_by_region_segment": _vs_plan(con, *region_seg, w, "region,segment"),
+        "operating_expense_lines": lines,
+        "operating_expense_groups": {
+            "freight_cost": ["base_freight", "fuel_surcharge"],
+            "labor_cost": ["payroll", "overtime"],
+            "other_lines": ["sales_commission", "occupancy", "other_opex"],
+            "other_lines_variance": _r(
+                sum(
+                    x["variance"]
+                    for x in lines
+                    if x["metric"] in ("sales_commission", "occupancy", "other_opex")
+                )
+            ),
+        },
+        "freight": _freight_split(con, w),
+        "labor": _labor(con, w),
+        "lumber_unit_cost_by_supplier": _supplier_cost_effects(con, start, end, "Lumber"),
+        "roofing_unit_cost_by_supplier": _supplier_cost_effects(con, start, end, "Roofing"),
+        "overtime_by_branch": overtime_by_branch,
+        "overtime_by_region": overtime_by_region,
+        "freight_by_region": freight_by_region,
+        "related_signals": [
+            {
+                "id": "gulf_coast_paid_search_conversion",
+                "metric": "conversion_rate",
+                "filters": {
+                    "region": st.CONVERSION_STORY_REGION,
+                    "lead_channel": st.CONVERSION_STORY_CHANNEL,
+                },
+                "current_period": {"start": start, "end": end},
+                "baseline_period": {"start": q1[0], "end": q1[1]},
+                "rate_current": _r(signal["rate_cur"], 4),
+                "rate_baseline": _r(signal["rate_base"], 4),
+                "leads_current": int(signal["leads_cur"]),
+                "leads_baseline": int(signal["leads_base"]),
+                "median_first_response_hours_current": _r(signal["resp_cur"], 1),
+                "median_first_response_hours_baseline": _r(signal["resp_base"], 1),
+                "shared_context": {"region": st.CONVERSION_STORY_REGION, "period": "Q2 2026"},
+                "relationship_to_gap": "not_established",
+                "note": "A verified operating signal in the same region and quarter as the Contractor discount "
+                "concentration; the data does not establish it as a cause of the operating profit miss.",
+            }
+        ],
+        "expected_discoveries": [
+            {"id": "premise_supported", "kind": "premise", "metric": "revenue", "verdict": "supported"},
+            {
+                "id": "op_below_plan",
+                "kind": "headline",
+                "metric": "operating_profit",
+                "direction": "down",
+                "max_variance_pct": -0.3,
+            },
+            {"id": "gm_majority", "kind": "bridge", "metric": "gross_margin", "min_share_of_gap": 0.6},
+            {"id": "opex_part", "kind": "bridge", "metric": "operating_expenses", "min_share_of_gap": 0.1},
+            {
+                "id": "unit_cost_lumber",
+                "kind": "segment",
+                "dimension": "category",
+                "value": top_cost,
+                "metric": "unit_cost_effect",
+                "direction": "down",
+            },
+            {
+                "id": "discount_contractor",
+                "kind": "segment",
+                "dimension": "segment",
+                "value": "Contractor",
+                "metric": "discount_effect",
+                "direction": "down",
+            },
+            {
+                "id": "discount_gulf_coast",
+                "kind": "segment",
+                "dimension": "region",
+                "value": disc_regions[0]["region"] if disc_regions else None,
+                "metric": "discount_effect",
+                "direction": "down",
+            },
+            {"id": "mix_offset", "kind": "bridge", "metric": "mix_effect", "direction": "up"},
+            {"id": "freight_overrun", "kind": "driver", "metric": "freight_cost", "direction": "up"},
+            {"id": "overtime_overrun", "kind": "driver", "metric": "overtime", "direction": "up"},
+            {
+                "id": "conversion_signal_not_causal",
+                "kind": "related_signal",
+                "metric": "conversion_rate",
+                "relationship": "not_established",
+            },
+        ],
+    }
 
 
 def _revenue_story(con) -> dict[str, Any]:
@@ -466,7 +1049,7 @@ def _margin_story(con) -> dict[str, Any]:
             "Why did margin decline despite flat revenue?",
         ],
         "metric": "gross_margin_pct",
-        "ambiguity_note": "'margin' matches Gross Margin, Gross Margin %, Contribution Margin and Operating Margin; "
+        "ambiguity_note": "'margin' matches Gross Margin, Gross Margin %, Contribution Margin and Operating Profit; "
         "the product must surface the choice. The answer key uses Gross Margin %.",
         "current_period": {"start": cur[0], "end": cur[1]},
         "baseline_period": {"start": base[0], "end": base[1]},
@@ -783,115 +1366,6 @@ def _inventory_story(con, slow_ids: list[str]) -> dict[str, Any]:
     }
 
 
-def _forecast_story(con) -> dict[str, Any]:
-    cur = st.Q2_2026
-    rows = _rows(
-        con,
-        """
-        WITH a AS (
-            SELECT region, segment, SUM(net_amount) AS actual FROM gt_sales
-            WHERE order_date BETWEEN ?::DATE AND ?::DATE GROUP BY 1, 2
-        ), f AS (
-            SELECT region, segment, SUM(forecast_revenue) AS forecast FROM revenue_forecast
-            WHERE forecast_month BETWEEN ?::DATE AND ?::DATE GROUP BY 1, 2
-        )
-        SELECT f.region, f.segment, COALESCE(a.actual, 0) AS actual, f.forecast
-        FROM f LEFT JOIN a USING (region, segment) ORDER BY 1, 2
-        """,
-        [*cur, *cur],
-    )
-    actual = sum(float(r["actual"]) for r in rows)
-    forecast = sum(float(r["forecast"]) for r in rows)
-    miss = actual - forecast
-
-    def roll(key: str) -> list[dict[str, Any]]:
-        agg: dict[str, list[float]] = {}
-        for r in rows:
-            a = agg.setdefault(r[key], [0.0, 0.0])
-            a[0] += float(r["actual"])
-            a[1] += float(r["forecast"])
-        return sorted(
-            [
-                {
-                    key: k,
-                    "actual": _r(v[0]),
-                    "forecast": _r(v[1]),
-                    "variance": _r(v[0] - v[1]),
-                    "variance_pct": _pct(v[0], v[1]),
-                    "share_of_miss": _r((v[0] - v[1]) / miss, 4),
-                }
-                for k, v in agg.items()
-            ],
-            key=lambda x: x["variance"],
-        )
-
-    cells = sorted(
-        [
-            {
-                "region": r["region"],
-                "segment": r["segment"],
-                "actual": _r(r["actual"]),
-                "forecast": _r(r["forecast"]),
-                "variance": _r(float(r["actual"]) - float(r["forecast"])),
-                "variance_pct": _pct(float(r["actual"]), float(r["forecast"])),
-                "share_of_miss": _r((float(r["actual"]) - float(r["forecast"])) / miss, 4),
-            }
-            for r in rows
-        ],
-        key=lambda x: x["variance"],
-    )
-    story_share = sum(
-        c["share_of_miss"] for c in cells if c["segment"] == "Contractor" and c["region"] in st.SOFT_REGIONS
-    )
-    return {
-        "id": "forecast_miss_q2_2026",
-        "title": "Q2 2026 actual revenue below the FY26 plan forecast",
-        "questions": ["What caused the forecast miss in Q2 2026?", "What caused the forecast miss?"],
-        "metric": "revenue",
-        "current_period": {"start": cur[0], "end": cur[1]},
-        "comparison": "actual_vs_forecast",
-        "forecast_version": st.FORECAST_VERSION,
-        "headline": {
-            "actual": _r(actual),
-            "forecast": _r(forecast),
-            "variance": _r(miss),
-            "variance_pct": _pct(actual, forecast),
-        },
-        "by_segment": roll("segment"),
-        "by_region": roll("region"),
-        "largest_cells": cells[:6],
-        "concentration": {
-            "segment": "Contractor",
-            "regions": list(st.SOFT_REGIONS),
-            "share_of_miss": _r(story_share, 4),
-        },
-        "expected_discoveries": [
-            {
-                "id": "miss",
-                "kind": "headline",
-                "metric": "revenue_vs_forecast",
-                "direction": "down",
-                "max_variance_pct": -0.03,
-            },
-            {
-                "id": "contractor",
-                "kind": "segment",
-                "dimension": "segment",
-                "value": "Contractor",
-                "direction": "down",
-                "min_share": 0.6,
-            },
-            {
-                "id": "regions",
-                "kind": "set",
-                "dimension": "region",
-                "values": list(st.SOFT_REGIONS),
-                "note": "Contractor miss concentrated in these regions",
-            },
-        ],
-    }
-
-
 def _dq_issues(con) -> list[dict[str, Any]]:
     def n(sql: str) -> int:
         return int(con.execute(sql).fetchone()[0])
@@ -1000,11 +1474,11 @@ def measure_scenarios(
             "COUNT(DISTINCT order_id) AS orders FROM gt_sales GROUP BY 1 ORDER BY 1",
         )
         stories = [
+            _operating_profit_story(con),
             _revenue_story(con),
             _margin_story(con),
             _conversion_story(con),
             _inventory_story(con, slow_ids),
-            _forecast_story(con),
         ]
         return {
             "company": "Summit Supply Co.",
@@ -1016,6 +1490,11 @@ def measure_scenarios(
                 "discount_rate": "SUM(discount_amount) / SUM(gross_amount)",
                 "conversion_rate": "SUM(leads.is_converted) / COUNT(leads.lead_id) by lead created_date",
                 "inventory_value": "SUM(inventory_snapshots.inventory_value) at one snapshot_date",
+                "operating_expenses": "orders.freight_cost (non-cancelled) + order_lines.commission_amount "
+                "(non-cancelled) + operating_expenses payroll + overtime + occupancy + other_opex",
+                "operating_profit": "Revenue - COGS - operating expenses",
+                "plan": f"{st.PLAN_VERSION}: sales_plan (month x region x segment x category) and opex_plan "
+                "(month x branch); every plan column is the plan for the actual of the same name",
             },
             "monthly_revenue": overall,
             "stories": {s["id"]: s for s in stories},

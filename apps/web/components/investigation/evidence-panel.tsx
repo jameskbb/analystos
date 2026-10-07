@@ -1,13 +1,14 @@
 "use client";
 import * as React from "react";
 import { CheckCircle2, XCircle, HelpCircle } from "lucide-react";
-import type { ArtifactRecord, Hypothesis, Investigation } from "@/lib/api/types";
+import type { ArtifactRecord, Hypothesis, Investigation, Reconciliation } from "@/lib/api/types";
 import { EvidenceBadge, EvidenceReasons } from "@/components/analysis/evidence";
 import { StatementTypeBadge } from "@/components/analysis/statement";
 import { SectionLabel } from "@/components/shell/page";
 import { Badge } from "@/components/ui/badge";
 import { formatInt } from "@/lib/format";
-import { datasetVersions, metricVersions, METHOD_LABEL, type NormNode } from "./model";
+import { datasetVersions, metricVersions, METHOD_LABEL, windowLabel, type NormNode } from "./model";
+import { isPlanBaseline, isRelatedSignal, relationshipLabel, valueLabels } from "./answer";
 import { cn } from "@/lib/utils";
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
@@ -47,11 +48,16 @@ export function EvidencePanel({
   artifacts,
   investigation,
   hypotheses,
+  root = null,
+  reconciliation = null,
 }: {
   node: NormNode | null;
   artifacts: ArtifactRecord[];
   investigation: Investigation;
   hypotheses: Hypothesis[];
+  root?: NormNode | null;
+  /** The investigation's reconciliation check, if it ran: tells whether this node is inside a reconciled decomposition. */
+  reconciliation?: Reconciliation | null;
 }) {
   const dvs = artifacts.length ? artifacts.flatMap(datasetVersions) : datasetVersions(investigation);
   const uniqDvs = [...new Map(dvs.map((d) => [d.table, d])).values()];
@@ -69,8 +75,32 @@ export function EvidencePanel({
           ) : null}
         </Section>
       ) : null}
+      {node ? (
+        <Section title="What was measured">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <StatementTypeBadge type={node.statement_type} />
+            {node.metric_label || node.metric_id ? <span className="text-xs text-fg-muted">{node.metric_label ?? node.metric_id}</span> : null}
+          </div>
+          <p className="mt-1 text-xs text-fg-muted">
+            {valueLabels(node).current} vs {isPlanBaseline(node) ? valueLabels(node).baseline.toLowerCase() : valueLabels(node).baseline}
+            {investigation.interpretation?.window ? `, ${windowLabel(investigation.interpretation.window)}` : ""}
+          </p>
+          {isRelatedSignal(node) ? (
+            <p className="mt-1 text-xs font-medium" data-testid="relationship">
+              {relationshipLabel(root)}
+            </p>
+          ) : reconciliation && node.root_effect !== null && node.root_effect !== undefined ? (
+            <p className={cn("mt-1 text-xs", reconciliation.reconciled ? "text-positive" : "text-warning")} data-testid="reconciliation-status">
+              {reconciliation.reconciled
+                ? `Part of the reconciled explanation of the ${reconciliation.metric_label} gap.`
+                : `Inside a decomposition that does not reconcile to the ${reconciliation.metric_label} gap.`}
+            </p>
+          ) : null}
+        </Section>
+      ) : null}
       {node?.contribution ? (
         <Section title="Methodology">
+          {node.method ? <p className="mb-1 text-xs text-fg-muted" data-testid="node-method">{node.method}</p> : null}
           <p className="text-xs text-fg-muted">
             {METHOD_LABEL[node.contribution.method] ?? `Method: ${node.contribution.method}`}
           </p>
@@ -87,13 +117,16 @@ export function EvidencePanel({
             </ul>
           ) : null}
         </Section>
-      ) : node?.notes?.length ? (
+      ) : node?.notes?.length || node?.method ? (
         <Section title="Methodology">
-          <ul className="list-disc pl-4 text-xs text-fg-subtle">
-            {node.notes.map((n, i) => (
-              <li key={i}>{n}</li>
-            ))}
-          </ul>
+          {node.method ? <p className="mb-1 text-xs text-fg-muted" data-testid="node-method">{node.method}</p> : null}
+          {node.notes?.length ? (
+            <ul className="list-disc pl-4 text-xs text-fg-subtle">
+              {node.notes.map((n, i) => (
+                <li key={i}>{n}</li>
+              ))}
+            </ul>
+          ) : null}
         </Section>
       ) : null}
       {node ? (

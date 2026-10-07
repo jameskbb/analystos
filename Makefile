@@ -71,7 +71,7 @@ typecheck-all: ## Mypy over every Python package (same set as CI)
 build: ## Production build of the web app
 	$(PNPM) --dir $(WEB) build
 
-e2e: ## Playwright acceptance flow (boots API + web on free ports with a throwaway data dir)
+e2e: ## Playwright acceptance flows (boots API + web on ports 18765 and 13765 with a throwaway data dir)
 	$(PNPM) --dir $(E2E) test
 
 migrate: ## Apply Alembic migrations to DATABASE_URL (default: SQLite in ./data)

@@ -11,7 +11,10 @@ from typing import Any
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-TODAY = "2026-09-18"
+# The demo workspace pins its reference date to the day the data is complete to (stories.END,
+# 2026-09-30), so the evals run with the same "today" the product uses: relative periods
+# ("last quarter") and cohort maturity (a metric's maturity_days) resolve identically.
+TODAY = "2026-09-30"
 
 
 def demo_cache_dir() -> Path:

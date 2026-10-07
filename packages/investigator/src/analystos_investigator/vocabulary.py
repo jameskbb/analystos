@@ -78,6 +78,8 @@ STOPWORDS = frozenset(
 
 
 def singular(tok: str) -> str:
+    if len(tok) > 4 and tok.endswith(("ches", "shes", "xes", "sses")):
+        return tok[:-2]  # branches -> branch, boxes -> box
     if len(tok) > 3 and tok.endswith("ies"):
         return tok[:-3] + "y"
     if len(tok) > 3 and tok.endswith("s") and not tok.endswith(("ss", "us", "is", "sales")):
@@ -103,7 +105,7 @@ class Span:
 @dataclass
 class TermHit:
     span: Span
-    kind: Literal["metric", "glossary", "dimension", "value", "head"]
+    kind: Literal["metric", "glossary", "dimension", "value", "head", "unmeasured"]
     targets: list[str]
     source: str
     dimension_values: list[tuple[str, str]] = field(default_factory=list)
@@ -120,19 +122,27 @@ class Vocabulary:
         self.dimension_phrases: dict[tuple[str, ...], set[str]] = {}
         self.value_phrases: dict[tuple[str, ...], list[tuple[str, str]]] = {}
         self.head_nouns: dict[str, set[str]] = {}
+        self.unmeasured_phrases: dict[tuple[str, ...], str] = {}
 
         for m in model.metrics:
             for name in _metric_names(m):
                 key = phrase_key(name)
                 if key:
                     self.metric_phrases.setdefault(key, set()).add(m.id)
-                    self.head_nouns.setdefault(key[-1], set()).add(m.id)
+                    if key[-1] not in ("%", "$"):  # a symbol is not a noun
+                        self.head_nouns.setdefault(key[-1], set()).add(m.id)
         for g in model.glossary:
             # A glossary term refers to metrics only when it says so (metric_id or explicit
             # candidates). Terms such as "Region" or "Product Tier" define a dimension or a
             # concept; their ``related`` list is context, never a metric reference, so they
             # must not shadow the dimension of the same name.
             targets: list[str] = []
+            if g.not_measured:
+                for name in [g.term, *g.synonyms]:
+                    key = phrase_key(name)
+                    if key:
+                        self.unmeasured_phrases[key] = g.term
+                continue
             if g.metric_id and model.has_metric(g.metric_id):
                 targets = [g.metric_id]
             else:
@@ -171,6 +181,7 @@ class Vocabulary:
                     *self.glossary_phrases,
                     *self.dimension_phrases,
                     *self.value_phrases,
+                    *self.unmeasured_phrases,
                 )
             ]
             or [1]
@@ -186,7 +197,9 @@ class Vocabulary:
                     continue
                 key = tuple(tokens[i : i + n])
                 span = Span(i, i + n, " ".join(key))
-                if key in self.metric_phrases:
+                if key in self.unmeasured_phrases and n > 1 and key not in self.metric_phrases:
+                    found = TermHit(span, "unmeasured", [], f"glossary term '{self.unmeasured_phrases[key]}'")
+                elif key in self.metric_phrases:
                     found = TermHit(
                         span, "metric", sorted(self.metric_phrases[key]), "metric name or synonym"
                     )
@@ -204,9 +217,12 @@ class Vocabulary:
                     found = TermHit(
                         span, "value", [], "dimension value", dimension_values=list(self.value_phrases[key])
                     )
+                elif key in self.unmeasured_phrases:
+                    found = TermHit(span, "unmeasured", [], f"glossary term '{self.unmeasured_phrases[key]}'")
                 if found:
                     break
-            if found is None and tokens[i] in self.head_nouns and tokens[i] not in STOPWORDS:
+            verb_use = i + 1 < len(tokens) and tokens[i + 1] in ("us", "me", "them", "you")  # "it cost us"
+            if found is None and tokens[i] in self.head_nouns and tokens[i] not in STOPWORDS and not verb_use:
                 found = TermHit(
                     Span(i, i + 1, tokens[i]),
                     "head",

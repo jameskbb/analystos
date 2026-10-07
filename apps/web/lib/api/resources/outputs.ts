@@ -103,6 +103,25 @@ export type BlockType =
   | "summary"
   | "open_questions";
 
+/** One KPI in a business review's `kpi_overview` block; plan fields are present when the metric has a plan. */
+export interface KpiOverviewItem {
+  metric_id: string;
+  label: string;
+  format?: string | null;
+  value: number | null;
+  baseline?: number | null;
+  pct_change?: number | null;
+  period?: string | null;
+  baseline_period?: string | null;
+  yoy_pct_change?: number | null;
+  higher_is_better?: boolean;
+  plan_metric_id?: string | null;
+  plan_label?: string | null;
+  plan?: number | null;
+  plan_variance?: number | null;
+  plan_variance_pct?: number | null;
+}
+
 export interface SourceItem {
   kind: string;
   label: string;
@@ -156,6 +175,31 @@ export interface ReportBlockSpec {
   reviewed?: boolean;
   excluded?: boolean;
   review_note?: string | null;
+  /** kpi blocks: what `baseline` is ("Plan", a plan metric's name); premise KPIs carry the verdict. */
+  baseline_label?: string | null;
+  verdict?: "supported" | "contradicted" | null;
+  note?: string | null;
+  /** narrative blocks: "Operating review" for the plan-variance review built from accepted nodes. */
+  reconciled?: boolean | null;
+  pending?: string[] | null;
+  watch?: string[] | null;
+  /** Operating review memo parts, when the engine provides them structured (else `markdown`). */
+  bridge?: T.Bridge | null;
+  headline?: string | null;
+  premise?: string | null;
+  bullets?: string[] | null;
+  /** The engine's name for the memo's "what explains it" bullets. */
+  causes?: string[] | null;
+  related?: string[] | null;
+  complete?: boolean | null;
+  /** bridge blocks: the plan-to-actual steps (see T.Bridge). */
+  steps?: T.BridgeStep[] | null;
+  start?: number | null;
+  end?: number | null;
+  gap?: number | null;
+  start_label?: string | null;
+  end_label?: string | null;
+  metric_label?: string | null;
 }
 
 export interface ReportOut {

@@ -25,8 +25,8 @@ export function Onboarding({ workspaceId, href, className }: { workspaceId: stri
           </h2>
           <p className="mt-1 text-sm text-fg-muted">
             Load the Summit Supply Co. demo, a building-materials distributor with two years of orders and five planted
-            analytical stories (an 11.8% August revenue decline, margin compression, a conversion drop, an inventory
-            build-up and a forecast miss), or bring your own data.
+            analytical stories (operating profit well below plan while revenue landed on plan, an 11.8% August revenue
+            decline, margin compression, a conversion drop and an inventory build-up), or bring your own data.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">

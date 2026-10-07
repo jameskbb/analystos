@@ -192,7 +192,7 @@ class Metric(_Model):
     kind: Literal["simple", "ratio", "derived"] = "simple"
     expr: str | None = None
     entity: str | None = None
-    agg: Literal["sum", "count", "count_distinct", "avg", "min", "max"] | None = None
+    agg: Literal["sum", "count", "count_distinct", "avg", "median", "min", "max"] | None = None
     numerator: str | None = None
     denominator: str | None = None
     formula: str | None = None
@@ -215,6 +215,22 @@ class Metric(_Model):
     """Cohort metrics (conversion by lead creation date) keep changing after the period ends.
     A period is immature until ``maturity_days`` after its end; queries with an ``as_of`` date
     flag immature values so they are not compared with mature ones as if final."""
+
+    plan_for: str | None = None
+    """For a plan, budget or forecast metric: the id of the actual metric it plans. The
+    investigator compares that actual metric against this one (its role, plan, budget or
+    forecast, comes from its tags), and pairs the parts of a metric tree with their own plan
+    metrics so a plan variance decomposes through the same governed identities as a change."""
+
+    related_metrics: list[str] = Field(default_factory=list)
+    """Governed metrics that relate to this one operationally but through no identity (for
+    example lead conversion for revenue, or response time for conversion). The investigator
+    measures them as *related signals* in the segments where an explanation of this metric
+    concentrates, and always reports them as observations whose relationship to the
+    explained change is not established; they never enter a reconciled tree."""
+
+    unit: str | None = None
+    """Display unit for ``number`` metrics (for example ``hours`` or ``days``)."""
 
     @field_validator("id")
     @classmethod
@@ -258,13 +274,25 @@ class Metric(_Model):
 
     def definition_hash(self) -> str:
         payload = self.model_dump(
-            mode="json", exclude={"owner", "tags", "synonyms", "description", "label", "canonical"}
+            mode="json",
+            exclude={
+                "owner",
+                "tags",
+                "synonyms",
+                "description",
+                "label",
+                "canonical",
+                "related_metrics",
+                "unit",
+            },
         )
         if payload.get("time_aggregation") == "sum":
             # The default keeps the hash of definitions written before the field existed.
             payload.pop("time_aggregation")
         if payload.get("maturity_days") is None:
             payload.pop("maturity_days", None)
+        if payload.get("plan_for") is None:
+            payload.pop("plan_for", None)
         return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:12]
 
     @property
@@ -330,6 +358,9 @@ class GlossaryTerm(_Model):
     related: list[str] = Field(default_factory=list)
     synonyms: list[str] = Field(default_factory=list)
     candidate_metric_ids: list[str] = Field(default_factory=list)
+    not_measured: bool = False
+    """A business concept the data does not measure (net income after tax, days sales outstanding).
+    Questions about it are answered with "not governed" instead of a neighbouring metric."""
 
 
 class CalendarConfig(_Model):
@@ -385,6 +416,10 @@ class SemanticModel(_Model):
             if t.root_metric == root_metric:
                 return t
         return None
+
+    def plan_metrics_for(self, actual_id: str) -> list[Metric]:
+        """Plan, budget or forecast metrics that declare ``plan_for: actual_id`` (by id)."""
+        return sorted((m for m in self.metrics if m.plan_for == actual_id), key=lambda m: m.id)
 
     def dimensions_for_entity(self, entity: str) -> list[Dimension]:
         return [d for d in self.dimensions if d.entity == entity]
@@ -478,6 +513,29 @@ class SemanticModel(_Model):
             for ref in [m.numerator, m.denominator] if m.kind == "ratio" else []:
                 if ref and ref not in metric_ids:
                     issues.append(ModelIssue(severity="error", object=obj, message=f"unknown metric {ref!r}"))
+            if m.plan_for is not None and (m.plan_for not in metric_ids or m.plan_for == m.id):
+                issues.append(
+                    ModelIssue(
+                        severity="error", object=obj, message=f"plan_for names unknown metric {m.plan_for!r}"
+                    )
+                )
+            elif m.plan_for is not None and self.get_metric(m.plan_for).plan_for is not None:
+                issues.append(
+                    ModelIssue(
+                        severity="error",
+                        object=obj,
+                        message=f"plan_for must name an actual metric; {m.plan_for!r} is itself a plan metric",
+                    )
+                )
+            for ref in m.related_metrics:
+                if ref not in metric_ids or ref == m.id:
+                    issues.append(
+                        ModelIssue(
+                            severity="error",
+                            object=obj,
+                            message=f"related_metrics names unknown metric {ref!r}",
+                        )
+                    )
             if m.kind == "derived":
                 try:
                     refs = formula_metric_refs(m.formula or "", self)

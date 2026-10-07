@@ -35,16 +35,46 @@ Q2_2026 = ("2026-04-01", "2026-06-30")
 Q2_2025 = ("2025-04-01", "2025-06-30")
 TARGET_Q2_REVENUE_YOY = 0.003
 COST_SHOCK = {  # unit-cost increase by category, ramped in by month (list prices not raised)
-    "Lumber": {"2026-03": 0.03, "2026-04": 0.06, "2026-05": 0.09},
     "Roofing": {"2026-03": 0.03, "2026-04": 0.05, "2026-05": 0.07},
 }
-CONTRACTOR_DISCOUNT_UPLIFT = 0.035  # Contractor discounting from April 2026 to defend volume
+SUPPLIER_COST_SHOCK = {  # (category, supplier): overrides COST_SHOCK for that supplier's products
+    ("Lumber", "Gulf States Forest Products"): {"2026-03": 0.12},  # mill curtailment, one price step
+    ("Lumber", "Piney Woods Timber"): {"2026-03": 0.01, "2026-04": 0.02, "2026-05": 0.025},
+}
+CONTRACTOR_DISCOUNT_UPLIFT = {  # Contractor discounting from April 2026 to defend volume,
+    "Gulf Coast": 0.08,  # deepest where the housing slowdown hit hardest
+    "default": 0.02,
+}
 CONTRACTOR_DISCOUNT_FROM = "2026-04"
 
-# --- Story 5: forecast miss, Q2 2026 actual vs FY26 plan (driven by Contractor softness) --
-FORECAST_GROWTH = 0.05
-FORECAST_VERSION = "FY26 Plan (Dec 2025)"
+# --- Story 0: operating profit below the FY26 Operating Plan, Q2 2026 (revenue on plan) ----
+PLAN_VERSION = "FY26 Operating Plan"
+PLAN_YEAR = 2026
+PLAN_BASE_YEAR = 2025
+PLAN_LIST_PRICE_INCREASE = 0.015  # January 2026 list-price increase (it happened as planned)
+PLAN_COST_INFLATION = 0.02  # planned supplier cost inflation, every category
+PLAN_VOLUME_GROWTH = {"Enterprise": 0.03, "Retail": -0.03}  # Contractor is solved (see below)
+TARGET_Q2_REVENUE_VS_PLAN = 0.004  # Q2 revenue lands this far above plan: the target is "hit"
+# Contractor volume growth is solved so the Q2 plan sits TARGET_Q2_REVENUE_VS_PLAN below the
+# calibrated Q2 actual (Q2 2025 x (1 + TARGET_Q2_REVENUE_YOY)): the plan anticipated a housing
+# slowdown, just not one as deep as Gulf Coast and Central Texas turned out to be.
+PLAN_FPA_ADJUSTMENT_SD = 0.01  # FP&A judgement per branch x segment
+NEW_STORE_RUN_RATE_MONTHS = ("2025-09", "2025-10", "2025-11")  # a store opened in FY25 is planned
+NEW_STORE_RAMP = 0.5  # at its Sep-Nov 2025 run rate (seasonally adjusted) plus this ramp
+PLAN_OPEX_GROWTH = {  # FY26 opex lines: prior-year branch actual x (1 + growth)
+    "payroll": 0.03,  # merit increase
+    "overtime": 0.0,
+    "occupancy": 0.025,  # lease escalators
+    "other_opex": 0.02,
+}
+PLAN_FREIGHT_RATE_INCREASE = 0.02  # freight planned at the prior-year freight/revenue ratio + 2%
 SOFT_REGIONS = ("Gulf Coast", "Central Texas")  # Contractor housing slowdown, calibrated knob
+FUEL_SURCHARGE_SPIKE = 0.40  # carrier fuel surcharge as a share of base freight, from April 2026
+FUEL_SURCHARGE_FROM = "2026-04"
+OVERTIME_STORY_BRANCHES = ("BR-SAT", "BR-AUS")  # unfilled yard positions covered with overtime
+OVERTIME_STORY_FROM = "2026-04"
+OPEN_POSITIONS = 2  # yard positions left unfilled per story branch (headcount below plan)
+OVERTIME_STORY_MONTHLY = 47_000.0  # extra overtime per story branch per month
 
 # --- Story 3: conversion decline, Q2 2026 vs Q1 2026 leads -----------------------------
 CONVERSION_STORY_REGION = "Gulf Coast"

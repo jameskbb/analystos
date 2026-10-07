@@ -13,7 +13,7 @@ The Summit Supply model is a complete example:
 |---|---|---|
 | Entity | name, table, primary_key (one or more columns), grain_description, default_time_dimension | Declares the grain of a table. |
 | Dimension | name, entity, expr, type (`categorical`, `time`, `numeric`), time_grains, label, synonyms | `expr` is SQL over the entity's own columns, e.g. `region` or `upper(trim(code))`. Time dimensions support `day, week, month, quarter, year, fiscal_quarter, fiscal_year` (`order_date__month`). |
-| Metric | id, name, label, description, kind, expr/agg or numerator/denominator or formula, filters, format, owner, tags, version, canonical, synonyms, default_time_dimension, higher_is_better | See kinds below. |
+| Metric | id, name, label, description, kind, expr/agg or numerator/denominator or formula, filters, format, unit, owner, tags, version, canonical, synonyms, default_time_dimension, higher_is_better, time_aggregation, maturity_days, plan_for, related_metrics | See kinds below; plans and related metrics further down. |
 | Relationship | from_entity.from_col -> to_entity.to_col, cardinality, **approved**, notes | Only approved, non many-to-many relationships are ever used for joins. |
 | Metric tree | root_metric, nodes of DriverEdge(parent, child, relation, approved, suggested) | relation: `additive`, `subtractive`, `multiplicative`, `ratio_numerator`, `ratio_denominator`. |
 | Glossary term | term, definition, formula, metric_id, candidate_metric_ids, related, synonyms | Used by question interpretation. |
@@ -21,8 +21,8 @@ The Summit Supply model is a complete example:
 
 Metric kinds:
 
-* **simple**: `agg(expr)` over the entity's rows (`sum`, `count`, `count_distinct`, `avg`, `min`,
-  `max`), optionally with filters on any dimension. Revenue is
+* **simple**: `agg(expr)` over the entity's rows (`sum`, `count`, `count_distinct`, `avg`, `median`,
+  `min`, `max`), optionally with filters on any dimension. Revenue is
   `sum(net_amount)` on `order_lines` filtered by `order_status != cancelled`.
 * **ratio**: `numerator / denominator`, both metric ids, always computed as a ratio of aggregates
   (never an average of row-level ratios) and guarded with `NULLIF(denominator, 0)`.
@@ -37,6 +37,18 @@ Ratios and derived metrics inherit it through their inputs. **Maturity.** Cohort
 is younger than that in `immature_metrics` and adds a warning, so a half-finished cohort is not
 compared with a mature one.
 
+**Plans.** A plan, budget or target metric names the actual it plans with `plan_for`; its role comes
+from its tags (`plan`, `budget`, `target`). The demo's FY26 Operating Plan has a plan metric for
+every node of the Operating Profit tree (`plan_revenue`, `plan_cogs`, `plan_freight_cost`, ...,
+`plan_operating_profit`), and its derived plan metrics are built from other plan metrics
+(`plan_operating_profit = plan_gross_margin - plan_operating_expenses`), so a variance against plan
+decomposes through the same identities as a change over time. `budget_revenue` and `revenue_target`
+also name `revenue`, under their own roles. **Related metrics.** `related_metrics` lists governed
+metrics that relate to this one operationally but through no identity (the demo sets
+`revenue -> conversion_rate -> median_first_response_hours`). The investigator reports them as
+related signals whose relationship to the explained change is not established; they never enter a
+reconciled tree. `unit` is a display unit for `number` metrics (`hours`).
+
 The model round-trips through YAML (`to_yaml` / `from_yaml`), validates referential integrity
 (`validate_model`, e.g. unknown dimensions, circular formulas, names shared by two metrics) and has a
 content hash. A metric's `version_id` is `{id}@v{version}:{sha256 of the definition[:12]}`; the API
@@ -46,7 +58,7 @@ stores every definition change as a new immutable version and every model change
 
 A metric is only chosen silently when the question matches exactly one candidate or exactly one
 canonical candidate. The demo glossary term **Margin** lists four candidates (Gross Margin,
-Gross Margin %, Contribution Margin, Operating Margin) and no metric claims the bare word, so
+Gross Margin %, Contribution Margin, Operating Profit) and no metric claims the bare word, so
 "Why did margin decline?" returns `needs_disambiguation` with the four choices.
 
 ## Grain-safe compilation
@@ -66,7 +78,7 @@ statement that cannot double count:
 4. The time window `[start, end)` is a row-level predicate for each atom, on the query's time
    dimension when that is reachable, otherwise on the atom's own default time dimension. So
    `return_rate` filters returns by `return_date` and revenue by `order_date`, and
-   `operating_margin` filters opex by `expense_month`.
+   `operating_profit` filters branch expenses by `expense_month` (and freight by `order_date`).
 5. Multiple CTEs meet on a spine of all dimension combinations using `IS NOT DISTINCT FROM` joins, so
    metrics from different grains are pre-aggregated before they meet.
 6. Parent tables are joined through a copy de-duplicated on the join key, so a "one" side that is
@@ -82,9 +94,14 @@ silently. The final SQL passes `ensure_read_only` and is pretty-printed for disp
 ## Conformed dimensions
 
 To compare facts from different tables, attach them to a shared dimension entity. The demo models
-`regions` and `customer_segments` as small reference entities that orders (through branches and
-customers), leads, budgets and the revenue forecast all reach, so "revenue vs forecast by segment"
-compiles in one query.
+`regions`, `customer_segments` and `product_categories` as small reference entities. Order lines
+reach all three (through orders, branches, customers and products), the sales plan carries all
+three directly, leads reach region and segment, and the opex plan reaches region through branches.
+So "revenue vs plan by category" or "COGS vs plan by region and segment" compiles in one query, and
+the plan-versus-actual margin bridge works on the (category, segment, region) cells both sides share. A
+dimension only the actuals reach, such as `supplier` (order lines -> products -> the `suppliers`
+master, whose clean names replace the messy free-text `products.supplier`), sits below the plan
+grain: it can split an effect inside a plan cell, but it cannot be compared with the plan directly.
 
 ## Joins and relationship discovery
 

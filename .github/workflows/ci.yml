@@ -141,7 +141,7 @@ jobs:
       - run: pnpm build
 
   e2e:
-    name: E2E (Playwright acceptance flows 1 and 2, production build)
+    name: E2E (Playwright acceptance flows 1 and 2 and the flagship CEO flow, production build)
     runs-on: ubuntu-latest
     timeout-minutes: 45
     needs: [python, web]

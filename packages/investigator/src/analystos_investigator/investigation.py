@@ -15,7 +15,7 @@ from typing import Any
 from analystos_engine.semantic.models import SemanticModel
 
 from .executor import ExecutionError, execute, extend_with_contribution
-from .formatting import fmt_share
+from .formatting import fmt_share, fmt_value
 from .hypotheses import generate as generate_hypotheses
 from .interpret import apply_choices, build_value_index, interpret
 from .llm.base import LLMProvider
@@ -34,7 +34,9 @@ from .models import (
     NodeChange,
     NodeStatus,
     PeriodCandidate,
+    PlanBridge,
     Premise,
+    RelatedSignal,
     TreeNode,
     utcnow,
 )
@@ -117,7 +119,11 @@ def resolve_premise_period(interp: Interpretation, store: Any, model: SemanticMo
     is recorded in ``period_candidates`` and the choice is explained in the notes. When no
     candidate qualifies, the default period stays and the premise check reports it.
     """
-    premises = [p for p in interp.premises if p.metric_id and p.metric_id != interp.primary_metric_id]
+    premises = [
+        p
+        for p in interp.premises
+        if p.metric_id and p.metric_id != interp.primary_metric_id and p.baseline_metric_id is None
+    ]
     subject = interp.primary_metric_id
     if (
         not premises
@@ -278,9 +284,15 @@ def run_investigation(inv: Investigation, store: Any, model: SemanticModel) -> I
             "failures": [*res.failures],
             "completed_at": utcnow(),
             "model_snapshot_hash": model.content_hash(),
+            "related_signals": list(res.related_signals),
+            "bridge": res.bridge,
         }
     )
-    out.brief_answer = brief_answer(res.tree) if status == "completed" else None
+    window = inv.plan.context.window.display() if inv.plan.context else None
+    out.brief_answer = (
+        brief_answer(res.tree, out.related_signals, window=window) if status == "completed" else None
+    )
+    out.brief_lead = brief_lead(res.tree, res.bridge, window=window) if status == "completed" else None
     out.followups = followups(out, model)
     return InvestigationRun(investigation=out, artifacts=res.artifacts)
 
@@ -293,8 +305,13 @@ def _share0(n: TreeNode) -> float:
     return (c.share or 0.0) if c is not None else 0.0
 
 
-def brief_answer(tree: InvestigationTree) -> str:
+def brief_answer(
+    tree: InvestigationTree, related: list[RelatedSignal] | None = None, *, window: str | None = None
+) -> str:
     """Short answer (spec §29) assembled from the tree's own statements and numbers.
+
+    A gap to plan with a reconciled decomposition gets the variance brief
+    (:func:`variance_brief`); everything else:
 
     * the measured change (root);
     * a premise the data contradicts, if any;
@@ -305,6 +322,9 @@ def brief_answer(tree: InvestigationTree) -> str:
     """
     root = tree.root()
     kids = tree.children_of(root.id)
+    rec = next((k for k in kids if k.role == "reconciliation" and k.reconciliation is not None), None)
+    if rec is not None:
+        return variance_brief(tree, related or [], window=window)
     metric = root.metric_label or root.metric_id or "the metric"
     parts = [root.statement.split(":")[0].rstrip(".") + "."]
     provisional = next((n for n in root.notes if n.startswith("provisional: ")), None)
@@ -393,12 +413,376 @@ def brief_answer(tree: InvestigationTree) -> str:
     return " ".join(parts)
 
 
+def _phrase(node: TreeNode) -> str:
+    """A node's title for use inside a sentence."""
+    title = node.title or node.metric_label or ""
+    if (
+        node.step_id
+        and node.step_id.startswith("margin_bridge")
+        and title[:1].isupper()
+        and title[1:2].islower()
+    ):
+        return title[0].lower() + title[1:]
+    return title
+
+
+class VarianceSentences:
+    """The sentences of a reconciled answer to a gap to plan (see :func:`variance_sentences`)."""
+
+    def __init__(self) -> None:
+        self.headline: str | None = None
+        self.premises: list[str] = []
+        self.explanation: list[str] = []
+        self.related: list[str] = []
+        self.pending: list[str] = []
+        """Titles of explanation parts left out because they are not included (not confirmed)."""
+        self.node_ids: list[str] = []
+        self.reconciled = False
+
+    def all(self) -> list[str]:
+        return [*([self.headline] if self.headline else []), *self.premises, *self.explanation, *self.related]
+
+
+def variance_sentences(
+    tree: InvestigationTree,
+    related: list[RelatedSignal],
+    *,
+    window: str | None = None,
+    include: set[str] | None = None,
+) -> VarianceSentences:
+    """The reconciled answer to a gap to plan, in the order an executive asks: how far off,
+    whether the premise holds, what the gap is made of (and that it adds back), what sits
+    inside the largest parts, and which related signals were seen but not established.
+
+    With ``include`` (for example the confirmed node ids), only those nodes are used; the
+    reconciled wording is kept only when every part of the top identity is included.
+    """
+    out = VarianceSentences()
+    root = tree.root()
+    kids = tree.children_of(root.id)
+    fmt = root.metric_format
+    rec_node = next((k for k in kids if k.role == "reconciliation" and k.reconciliation is not None), None)
+    if rec_node is None or rec_node.reconciliation is None:
+        return out
+    rec = rec_node.reconciliation
+    gap = rec.gap
+    noun = "miss" if "missed" in (root.title or "") else "gap"
+    when = f" in {window}" if window else ""
+
+    def ok(node_id: str | None) -> bool:
+        return include is None or (node_id is not None and node_id in include)
+
+    if ok(root.id):
+        out.headline = (
+            f"{root.title or rec.metric_label} by {fmt_value(abs(gap), fmt)}{when}: {fmt_value(rec.actual, fmt)} "
+            f"against a plan of {fmt_value(rec.baseline, fmt)} ({_pct(root.pct_change)})."
+        )
+        out.node_ids.append(root.id)
+    for k in kids:
+        if k.role == "premise" and k.current is not None and k.baseline is not None and ok(k.id):
+            held = "holds" if k.verdict == "supported" else "does not hold"
+            out.premises.append(
+                f"The premise {held}: {k.metric_label} was {fmt_value(k.current, k.metric_format)} against "
+                f"{k.baseline_label or 'plan'} of {fmt_value(k.baseline, k.metric_format)} ({_pct(k.pct_change)})."
+            )
+            out.node_ids.append(k.id)
+    by_id = tree.by_id()
+
+    def sentence(identity: Any, lead: str | None, closing: str) -> str:
+        parent_amount = identity.parent_amount
+        comps = [c for c in identity.components if ok(c.node_id)]
+        same = [
+            c for c in comps if c.amount * parent_amount > 0 and abs(c.amount) >= 0.05 * abs(parent_amount)
+        ]
+        against = [
+            c for c in comps if c.amount * parent_amount < 0 and abs(c.amount) >= 0.02 * abs(parent_amount)
+        ]
+        same.sort(key=lambda c: -abs(c.amount))
+        against.sort(key=lambda c: -abs(c.amount))
+        if not same:
+            return ""
+        items = []
+        for i, c in enumerate(same[:3]):
+            node = by_id.get(c.node_id or "")
+            label = _phrase(node) if node else c.label
+            why = cause_text(tree, node) if node is not None and lead else ""
+            detail = f" ({why})" if why else ""
+            items.append(
+                f"{label} {'accounts for' if i == 0 else 'for'} {fmt_value(abs(c.amount), fmt)}{detail}"
+            )
+            out.node_ids.append(c.node_id or "")
+        joined = items[0] if len(items) == 1 else ", ".join(items[:-1]) + " and " + items[-1]
+        text = (lead + ", " if lead else "") + joined
+        if against:
+            offs = []
+            for c in against[:2]:
+                node = by_id.get(c.node_id or "")
+                label = _phrase(node) if node else c.label
+                offs.append(f"{fmt_value(abs(c.amount), fmt)} of {label}")
+                out.node_ids.append(c.node_id or "")
+            text += ", partially offset by " + " and ".join(offs)
+        return text + closing
+
+    top = rec.identities[0]
+    missing = [c for c in top.components if not ok(c.node_id)]
+    out.pending = [c.label for c in missing if abs(c.amount) >= 0.02 * abs(top.parent_amount)]
+    if rec.reconciled and not missing:
+        closing = f", which reconciles exactly to the {fmt_value(abs(gap), fmt)} {noun}."
+        out.reconciled = True
+    elif rec.reconciled:
+        covered = sum(c.amount for c in top.components if ok(c.node_id))
+        closing = (
+            f"; the confirmed parts account for {fmt_value(abs(covered), fmt)} of the {fmt_value(abs(gap), fmt)} "
+            f"{noun} ({len(missing)} part{'s' if len(missing) != 1 else ''} not yet confirmed)."
+        )
+    else:
+        closing = f"; the parts leave {fmt_value(abs(top.residual), fmt)} unexplained."
+    first = sentence(top, None, closing)
+    if first:
+        out.explanation.append(first[0].upper() + first[1:])
+    for identity in rec.identities[1:]:
+        node = by_id.get(identity.parent_node_id or "")
+        if node is None or node.parent_id != root.id:
+            continue
+        text = sentence(identity, f"Within {node.metric_label}", ".")
+        if text:
+            out.explanation.append(text)
+    for sig in related:
+        if not ok(sig.node_id) or len(out.related) >= 2:
+            continue
+        where = " / ".join(str(x.value) for x in sig.segment_path)
+        verb = "fell" if (sig.current or 0.0) < (sig.baseline or 0.0) else "rose"
+        text = (
+            f"Related signal, relationship not established: in {where}, {sig.metric_label} {verb} from "
+            f"{fmt_value(sig.baseline, sig.metric_format, sig.unit)} to {fmt_value(sig.current, sig.metric_format, sig.unit)}"
+        )
+        out.node_ids.append(sig.node_id)
+        for sid in sig.supporting_node_ids[:2]:
+            n = by_id.get(sid)
+            if n is not None and n.current is not None and n.baseline is not None:
+                w = "fell" if n.current < n.baseline else "rose"
+                text += (
+                    f" and {n.metric_label} {w} from {fmt_value(n.baseline, n.metric_format, n.metric_unit)} to "
+                    f"{fmt_value(n.current, n.metric_format, n.metric_unit)}"
+                )
+                out.node_ids.append(sid)
+        text += (
+            f" ({sig.window.display()} vs {sig.baseline_window.display()}); the available data does not establish "
+            f"it as a cause of the {rec.metric_label} {noun}."
+        )
+        if sig.provisional:
+            text += " The signal is provisional: recent cohorts are still maturing."
+        out.related.append(text)
+    out.node_ids = [i for i in dict.fromkeys(out.node_ids) if i]
+    return out
+
+
+def variance_brief(
+    tree: InvestigationTree, related: list[RelatedSignal], *, window: str | None = None
+) -> str:
+    """The brief answer to a gap to plan (every sentence of :func:`variance_sentences`)."""
+    return " ".join(variance_sentences(tree, related, window=window).all())
+
+
+def _drivers(tree: InvestigationTree, node: TreeNode) -> list[TreeNode]:
+    return [
+        c for c in tree.children_of(node.id) if c.kind in ("driver", "other") and c.root_effect is not None
+    ]
+
+
+def _leaders(tree: InvestigationTree, node: TreeNode) -> list[TreeNode]:
+    """Segments under a node's breakdowns that carry at least 20% of it, largest first."""
+    segs = [
+        s
+        for g in tree.children_of(node.id)
+        if g.kind == "dimension"
+        for s in tree.children_of(g.id)
+        if s.kind == "segment"
+        and s.segment is not None
+        and s.contribution_to_parent is not None
+        and (s.contribution_to_parent.share or 0.0) >= 0.2
+        and s.root_effect is not None
+    ]
+    return sorted(segs, key=lambda s: (-abs(s.root_effect or 0.0), s.id))
+
+
+def cause_text(tree: InvestigationTree, node: TreeNode) -> str:
+    """Where a part of the gap comes from, down to its measured operational cause:
+    "Lumber $611.1k, mostly supplier Gulf States Forest Products ($520.0k), and Roofing $297.0k",
+    "Fuel Surcharge overrun $250.0k", "Overtime overrun $169.4k in San Antonio and Austin, partly
+    offset by Payroll saving $44.6k". Numbers are node values; nothing is inferred."""
+    fmt = tree.root().metric_format
+    amount = node.root_effect or 0.0
+
+    def amt(n: TreeNode) -> str:
+        return fmt_value(abs(n.root_effect or 0.0), fmt)
+
+    kids = _drivers(tree, node)
+    if kids and not node.members:
+        same = sorted(
+            (
+                k
+                for k in kids
+                if (k.root_effect or 0.0) * amount > 0 and abs(k.root_effect or 0.0) >= 0.2 * abs(amount)
+            ),
+            key=lambda k: -abs(k.root_effect or 0.0),
+        )
+        against = sorted(
+            (
+                k
+                for k in kids
+                if (k.root_effect or 0.0) * amount < 0 and abs(k.root_effect or 0.0) >= 0.2 * abs(amount)
+            ),
+            key=lambda k: -abs(k.root_effect or 0.0),
+        )
+        parts = []
+        for k in same[:2]:
+            inner = _segment_places(tree, k)
+            parts.append(f"{_phrase(k)} {amt(k)}" + (f" in {inner}" if inner else ""))
+        text = " and ".join(parts)
+        if against:
+            k = against[0]
+            inner = _segment_places(tree, k)
+            if inner and inner in text:
+                where = f" in the same {_plural(_leaders(tree, k)[0].segment.dimension)}"  # type: ignore[union-attr]
+            else:
+                where = f" in {inner}" if inner else ""
+            text += f", partly offset by {_phrase(k)} {amt(k)}{where}"
+        return text
+    lead = _leaders(tree, node)
+    if not lead:
+        return ""
+    parts = []
+    for i, s in enumerate(lead[:2]):
+        text = f"{s.segment.value} {amt(s)}"  # type: ignore[union-attr]
+        below = _leaders(tree, s) if i == 0 else []
+        if below and below[0].segment is not None:
+            dim = (below[0].segment.dimension or "").replace("_", " ")
+            share = below[0].contribution_to_parent.share if below[0].contribution_to_parent else None
+            word = "mostly" if share is not None and share >= 0.5 else "largest"
+            text += f", {word} {dim} {below[0].segment.value} ({amt(below[0])})"
+        parts.append(text)
+    return ("; " if any(", " in p for p in parts) else " and ").join(parts)
+
+
+def _plural(dimension: str | None) -> str:
+    word = (dimension or "segment").replace("_", " ")
+    return word + ("es" if word.endswith(("ch", "sh", "s", "x")) else "s")
+
+
+def _segment_places(tree: InvestigationTree, node: TreeNode) -> str:
+    """ "San Antonio and Austin": the segments that carry a line's gap (or '')."""
+    lead = _leaders(tree, node)
+    return " and ".join(str(s.segment.value) for s in lead[:2] if s.segment is not None)
+
+
+def _cause_names(tree: InvestigationTree, node: TreeNode) -> str:
+    """The short form of :func:`cause_text`: names only ("Lumber, Pine Co", "fuel surcharge")."""
+    amount = node.root_effect or 0.0
+    kids = [k for k in _drivers(tree, node) if (k.root_effect or 0.0) * amount > 0]
+    if kids and not node.members:
+        k = max(kids, key=lambda k: abs(k.root_effect or 0.0))
+        inner = _segment_places(tree, k)
+        name = (k.metric_label or k.title or "").lower()
+        return name + (f" in {inner}" if inner else "")
+    lead = _leaders(tree, node)
+    if not lead:
+        return ""
+    names = " and ".join(str(s.segment.value) for s in lead[:2] if s.segment is not None)
+    below = _leaders(tree, lead[0])
+    if below and below[0].segment is not None:
+        dim = (below[0].segment.dimension or "").replace("_", " ")
+        names += f"; {dim} {below[0].segment.value}" if len(lead) > 1 else f", {below[0].segment.value}"
+    return names
+
+
+def brief_lead(
+    tree: InvestigationTree, bridge: PlanBridge | None, *, window: str | None = None
+) -> str | None:
+    """Two or three short sentences for a gap to plan: how far off (and whether the premise
+    holds), how the gap splits, and the largest causes."""
+    if bridge is None or not tree.root_id:
+        return None
+    root = tree.root()
+    fmt = root.metric_format
+    kids = tree.children_of(root.id)
+    rec = next((k.reconciliation for k in kids if k.role == "reconciliation" and k.reconciliation), None)
+    if rec is None:
+        return None
+    first = (
+        f"{root.title or rec.metric_label} by {fmt_value(abs(bridge.gap), fmt)} ({_pct(root.pct_change)})"
+        + (f" in {window}" if window else "")
+    )
+    premise = next((k for k in kids if k.role == "premise"), None)
+    if premise is not None and premise.verdict == "supported":
+        first += f", while {premise.metric_label} met {premise.baseline_label or 'its plan'}"
+    elif premise is not None:
+        first += f"; {premise.metric_label} did not meet {premise.baseline_label or 'its plan'}"
+    by_id = tree.by_id()
+    comps = [c for c in rec.identities[0].components if c.amount * bridge.gap > 0]
+    comps.sort(key=lambda c: -abs(c.amount))
+    labels = [
+        f"{(by_id[c.node_id].metric_label if c.node_id in by_id else c.label)} {fmt_value(abs(c.amount), fmt)}"
+        for c in comps[:2]
+    ]
+    second = ""
+    if labels:
+        second = f"{labels[0].rsplit(' ', 1)[0]} explains {labels[0].rsplit(' ', 1)[1]} of the gap" + (
+            f" and {labels[1].rsplit(' ', 1)[0]} {labels[1].rsplit(' ', 1)[1]}" if len(labels) > 1 else ""
+        )
+    causes = []
+    for st in sorted(
+        (st for st in bridge.steps if st.amount * bridge.gap > 0), key=lambda st: -abs(st.amount)
+    )[:3]:
+        node = by_id.get(st.node_id or "")
+        if node is None or node.members:
+            continue
+        names = _cause_names(tree, node)
+        causes.append(_phrase(node).lower() if node.title and node.title[1:2].islower() else _phrase(node))
+        if names:
+            causes[-1] += f" ({names})"
+    third = ""
+    if causes:
+        third = "The largest causes: " + (
+            causes[0] if len(causes) == 1 else ", ".join(causes[:-1]) + " and " + causes[-1]
+        )
+    return " ".join(x + "." for x in (first, second, third) if x)
+
+
+def _variance_followups(inv: Investigation, model: SemanticModel) -> list[str]:
+    """What to look at next after a gap to plan: each related signal as its own investigation
+    (it is not established by this one), then the same period a year earlier."""
+    ctx = inv.plan.context if inv.plan else None
+    out: list[str] = []
+    if ctx is None:
+        return out
+    for sig in inv.related_signals:
+        m = model.get_metric(sig.metric_id) if model.has_metric(sig.metric_id) else None
+        if m is None or not sig.segment_path:
+            continue
+        verb = "decline" if (sig.current or 0.0) < (sig.baseline or 0.0) else "increase"
+        where = " ".join(str(s.value) for s in sig.segment_path[:1])
+        out.append(f"Why did {m.display_name.lower()} {verb} in {where} in {sig.window.display()}?")
+    root = model.get_metric(ctx.metric_id).display_name
+    out.append(
+        f"Why did {root.lower()} change in {ctx.window.display()} compared with the same period last year?"
+    )
+    for h in inv.hypotheses:
+        if h.category == "untestable":
+            text = h.statement.removeprefix("Hypothesis (not tested): ").rstrip(".")
+            out.append(f"Add data to test whether {text}")
+            break
+    return out[:6]
+
+
 def followups(inv: Investigation, model: SemanticModel) -> list[str]:
     """Deterministic follow-up suggestions from what was and was not explored."""
     out: list[str] = []
     ctx = inv.plan.context if inv.plan else None
     if ctx is None:
         return out
+    if ctx.plan_metrics and inv.tree.root_id:
+        return _variance_followups(inv, model)
     tree = inv.tree
     if tree.root_id:
         used = {n.dimension for n in tree.nodes if n.dimension}

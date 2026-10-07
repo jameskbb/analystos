@@ -28,6 +28,8 @@ from .investigation import (
     run_investigation,
     set_node_status,
     update_plan,
+    variance_brief,
+    variance_sentences,
 )
 from .models import (
     ENGINE_VERSION,
@@ -47,6 +49,10 @@ from .models import (
     PlanContext,
     PlanStep,
     Premise,
+    Reconciliation,
+    ReconciliationIdentity,
+    ReconciliationLine,
+    RelatedSignal,
     Segment,
     SegmentComparison,
     Summary,
@@ -54,7 +60,7 @@ from .models import (
     TreeNode,
 )
 from .planner import PlanningError, add_step, plan, remove_step, set_step_enabled, update_step
-from .summary import FindingInput, executive_summary
+from .summary import FindingInput, VarianceReview, executive_summary, variance_review
 from .templates import TEMPLATES, InvestigationTemplate, choose_template, get_template
 
 __all__ = [
@@ -83,11 +89,16 @@ __all__ = [
     "PlanStep",
     "PlanningError",
     "Premise",
+    "Reconciliation",
+    "ReconciliationIdentity",
+    "ReconciliationLine",
+    "RelatedSignal",
     "Segment",
     "SegmentComparison",
     "Summary",
     "SummaryItem",
     "TreeNode",
+    "VarianceReview",
     "add_step",
     "additive_contribution",
     "annotate_node",
@@ -123,4 +134,7 @@ __all__ = [
     "templates",
     "update_plan",
     "update_step",
+    "variance_brief",
+    "variance_review",
+    "variance_sentences",
 ]

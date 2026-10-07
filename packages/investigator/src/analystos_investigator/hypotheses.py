@@ -95,7 +95,11 @@ def generate(
         )
 
     for s in p.steps:
-        if s.kind != "contribution" or s.params.get("metric_id") != ctx.metric_id:
+        if (
+            s.kind != "contribution"
+            or s.params.get("metric_id") != ctx.metric_id
+            or "dimension" not in s.params
+        ):
             continue
         dim = model.get_dimension(s.params["dimension"])
         roles = dimension_roles(dim)

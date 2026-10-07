@@ -534,3 +534,30 @@ CITY_BY_BRANCH = {
     "BR-OKC": ("Oklahoma City", "Edmond", "Norman", "Moore", "Yukon"),
     "BR-TUL": ("Tulsa", "Broken Arrow", "Owasso", "Sand Springs"),
 }
+
+# Branch operating cost model (monthly). Payroll and other costs have a fixed part per square
+# foot and a part that scales with the branch's revenue; occupancy is fixed per square foot.
+OCCUPANCY_PER_SQFT = 0.27
+PAYROLL_PER_SQFT = 0.42
+PAYROLL_PER_REVENUE = 0.033
+OVERTIME_SHARE_OF_PAYROLL = 0.07
+PAYROLL_PER_FTE = 5_200.0  # loaded monthly cost of one full-time employee, FY25 rates
+OTHER_OPEX_PER_SQFT = 0.07
+OTHER_OPEX_PER_REVENUE = 0.002
+ANNUAL_COST_STEP = {"payroll": 0.03, "occupancy": 0.025, "other_opex": 0.02}  # FY26 over FY25
+FREIGHT_PER_DELIVERY = 24.0
+FREIGHT_RATE = 0.028  # share of the delivered order's net value
+FREIGHT_ANNUAL_INCREASE = 0.02  # carrier rate step each January from 2026
+FUEL_SURCHARGE_RATE = 0.04  # normal carrier fuel surcharge, share of base freight
+CATEGORY_MANAGERS = {
+    "Lumber": "Wade Kessler",
+    "Drywall": "Noemi Arriaga",
+    "Roofing": "Clay Pruitt",
+    "Insulation": "Noemi Arriaga",
+    "Plumbing": "Farah Siddiqui",
+    "Electrical": "Farah Siddiqui",
+    "Tools": "Ben Okafor",
+    "Hardware": "Ben Okafor",
+    "Concrete & Masonry": "Wade Kessler",
+    "Paint": "Lucia Brandt",
+}

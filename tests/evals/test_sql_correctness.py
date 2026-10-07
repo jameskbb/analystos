@@ -204,34 +204,59 @@ CASES: list[Case] = [
         why="numerator dated by return_date, denominator by order_date",
     ),
     Case(
-        "operating_margin_by_branch_cross_entity",
-        ["contribution_margin", "operating_expenses", "operating_margin"],
+        "operating_profit_by_branch_cross_entity",
+        ["contribution_margin", "operating_expenses", "operating_profit"],
         ["branch"],
         D(2026, 6, 1),
         D(2026, 7, 1),
-        f"""WITH s AS (SELECT branch_id, SUM(net_amount) - SUM(cost_amount) - SUM(commission_amount) AS gm_less_comm
+        f"""WITH s AS (SELECT branch_id, SUM(net_amount) - SUM(cost_amount) AS gm, SUM(commission_amount) AS comm
                       FROM ({SALES}) WHERE order_date BETWEEN '2026-06-01' AND '2026-06-30' GROUP BY 1),
                  f AS (SELECT branch_id, SUM(freight_cost) AS freight FROM orders
                       WHERE status <> 'cancelled' AND order_date BETWEEN '2026-06-01' AND '2026-06-30' GROUP BY 1),
-                 x AS (SELECT branch_id, SUM(total_opex) AS opex FROM operating_expenses
-                      WHERE expense_month = '2026-06-01' GROUP BY 1)
-            SELECT b.branch_name, s.gm_less_comm - f.freight, x.opex, s.gm_less_comm - f.freight - x.opex
+                 x AS (SELECT branch_id, SUM(payroll + overtime + occupancy + other_opex) AS lines
+                      FROM operating_expenses WHERE expense_month = '2026-06-01' GROUP BY 1)
+            SELECT b.branch_name, s.gm - s.comm - f.freight, f.freight + s.comm + x.lines,
+                   s.gm - f.freight - s.comm - x.lines
             FROM s JOIN f USING (branch_id) JOIN x USING (branch_id) JOIN branches b USING (branch_id)""",
         why="three entities, two date columns, one conformed branch dimension",
     ),
     Case(
-        "actual_and_forecast_by_segment",
-        ["revenue", "forecast_revenue"],
+        "actual_and_plan_by_segment",
+        ["revenue", "plan_revenue"],
         ["segment"],
         D(2026, 4, 1),
         D(2026, 7, 1),
         f"""WITH a AS (SELECT c.segment, SUM(s.net_amount) AS rev FROM ({SALES}) s
                       JOIN customers_dedup c USING (customer_id)
                       WHERE order_date BETWEEN '2026-04-01' AND '2026-06-30' GROUP BY 1),
-                 f AS (SELECT segment, SUM(forecast_revenue) AS fc FROM revenue_forecast
-                      WHERE forecast_month BETWEEN '2026-04-01' AND '2026-06-30' GROUP BY 1)
-            SELECT segment, a.rev, f.fc FROM a JOIN f USING (segment)""",
+                 p AS (SELECT segment, SUM(plan_revenue) AS pl FROM sales_plan
+                      WHERE plan_month BETWEEN '2026-04-01' AND '2026-06-30' GROUP BY 1)
+            SELECT segment, a.rev, p.pl FROM a JOIN p USING (segment)""",
         why="actual vs plan on a conformed dimension",
+    ),
+    Case(
+        "operating_profit_vs_plan_by_region",
+        ["operating_profit", "plan_operating_profit"],
+        ["region"],
+        D(2026, 4, 1),
+        D(2026, 7, 1),
+        f"""WITH s AS (SELECT b.region, SUM(net_amount) - SUM(cost_amount) - SUM(commission_amount) AS v
+                      FROM ({SALES}) x JOIN branches b USING (branch_id)
+                      WHERE order_date BETWEEN '2026-04-01' AND '2026-06-30' GROUP BY 1),
+                 f AS (SELECT b.region, SUM(freight_cost) AS freight FROM orders o JOIN branches b USING (branch_id)
+                      WHERE status <> 'cancelled' AND order_date BETWEEN '2026-04-01' AND '2026-06-30' GROUP BY 1),
+                 x AS (SELECT b.region, SUM(payroll + overtime + occupancy + other_opex) AS lines
+                      FROM operating_expenses e JOIN branches b USING (branch_id)
+                      WHERE expense_month BETWEEN '2026-04-01' AND '2026-06-30' GROUP BY 1),
+                 ps AS (SELECT region, SUM(plan_revenue) - SUM(plan_cogs) - SUM(plan_sales_commission) AS v
+                      FROM sales_plan WHERE plan_month BETWEEN '2026-04-01' AND '2026-06-30' GROUP BY 1),
+                 po AS (SELECT b.region, SUM(plan_freight_cost + plan_payroll + plan_overtime + plan_occupancy
+                                             + plan_other_opex) AS lines
+                      FROM opex_plan o JOIN branches b USING (branch_id)
+                      WHERE plan_month BETWEEN '2026-04-01' AND '2026-06-30' GROUP BY 1)
+            SELECT s.region, s.v - f.freight - x.lines, ps.v - po.lines
+            FROM s JOIN f USING (region) JOIN x USING (region) JOIN ps USING (region) JOIN po USING (region)""",
+        why="actual and plan operating profit on a conformed region from five tables and three date columns",
     ),
     Case(
         "budget_from_excel_by_region",

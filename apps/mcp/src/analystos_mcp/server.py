@@ -63,6 +63,11 @@ def _compact_tree(inv: dict[str, Any], max_nodes: int = 60) -> list[dict[str, An
                 "pct_change": n.get("pct_change"),
                 "share_of_parent_change": c.get("share"),
                 "artifact_ids": n.get("artifact_ids", []),
+                **{
+                    k: n[k]
+                    for k in ("title", "role", "verdict", "root_effect", "relationship")
+                    if n.get(k) is not None
+                },
             }
         )
     return out
@@ -89,6 +94,17 @@ def _investigation_view(inv: dict[str, Any], include_tree: bool = True) -> dict[
     if inv.get("plan"):
         view["plan"] = [
             {"id": s["id"], "title": s["title"], "enabled": s["enabled"]} for s in inv["plan"]["steps"]
+        ]
+    if inv.get("related_signals"):
+        # observations next to the explanation; their relationship to the change is not established
+        view["related_signals"] = [
+            {
+                "node_id": r["node_id"],
+                "statement": r["statement"],
+                "relationship": r.get("relationship", "not_established"),
+                "relationship_note": r.get("relationship_note"),
+            }
+            for r in inv["related_signals"]
         ]
     if include_tree:
         view["tree"] = _compact_tree(inv)

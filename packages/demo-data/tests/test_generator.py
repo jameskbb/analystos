@@ -52,7 +52,10 @@ def test_scale_and_shape(demo, raw):
         "targets",
         "leads",
         "opportunities",
-        "revenue_forecast",
+        "product_categories",
+        "sales_plan",
+        "opex_plan",
+        "operating_expenses",
     ):
         assert t in tables
 
@@ -141,4 +144,22 @@ def test_stories_are_robust_to_the_seed(tmp_path):
     assert c["headline"]["conversion_rate_change_pp"] < -1.5 and abs(c["headline"]["leads_pct_change"]) < 0.05
     assert c["concentration"]["share_of_decline_explained"] > 0.6
     assert s["inventory_buildup_2026"]["slow_moving_skus"]["share_of_increase"] > 0.6
-    assert s["forecast_miss_q2_2026"]["concentration"]["share_of_miss"] > 0.6
+    op = s["operating_profit_miss_q2_2026"]
+    assert abs(op["headline"]["revenue_variance_pct"]) < 0.01 and op["premise"]["verdict"] == "supported"
+    assert -0.6 < op["headline"]["operating_profit_variance_pct"] < -0.3
+    assert 0.6 < op["bridge"]["gross_margin"]["share_of_gap"] < 0.78, "opex is a material part of the gap"
+    gm = op["gross_margin_bridge"]
+    assert gm["unit_cost_effect"] < gm["discount_effect"] < 0 < gm["mix_effect"]
+    assert [r["category"] for r in op["unit_cost_effect_by_category"][:2]] == ["Lumber", "Roofing"]
+    assert op["discount_effect_by_segment"][0]["segment"] == "Contractor"
+    assert op["contractor_discount_effect_by_region"][0]["region"] == "Gulf Coast"
+    lines = [x["metric"] for x in op["operating_expense_lines"]]
+    assert lines[:2] == ["freight_cost", "overtime"]
+    assert op["freight"]["fuel_surcharge_share_of_overrun"] > 0.9
+    assert {b["branch"] for b in op["labor"]["by_branch"][:2]} == {"San Antonio", "Austin"}
+    sup = op["lumber_unit_cost_by_supplier"]
+    assert sup[0]["supplier"] == "Gulf States Forest Products" and sup[0]["share"] > 0.7
+    roofing = [
+        r["cost_vs_plan_pct"] for r in op["roofing_unit_cost_by_supplier"] if r["supplier"] != "supplier_mix"
+    ]
+    assert max(roofing) - min(roofing) < 0.02, "Roofing's increase is broad across suppliers"

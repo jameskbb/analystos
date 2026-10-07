@@ -32,7 +32,23 @@ StatementType = Literal["observation", "supported_explanation", "hypothesis"]
 EvidenceStrength = Literal["strong", "moderate", "weak", "hypothesis_only"]
 NodeStatus = Literal["proposed", "confirmed", "rejected", "needs_review", "failed"]
 NodeKind = Literal["root", "driver", "dimension", "segment", "other", "check", "hypothesis", "failed"]
-StepKind = Literal["decompose", "segment", "contribution", "compare", "anomaly", "custom_sql", "python"]
+StepKind = Literal[
+    "decompose",
+    "segment",
+    "contribution",
+    "compare",
+    "anomaly",
+    "custom_sql",
+    "python",
+    "reconcile",
+    "related_signals",
+]
+NodeRole = Literal["premise", "reconciliation", "related_signal"]
+"""What a ``check`` node is for, so a client can place it without parsing prose: a premise
+verdict, the reconciliation of an exact decomposition, or a related signal (an observation
+whose relationship to the explained change is not established, never part of the tree's
+reconciled explanation)."""
+PremiseExpectation = Literal["flat", "increase", "decrease", "meets_plan", "misses_plan"]
 ArtifactKind = Literal[
     "query", "dataframe", "metric_result", "chart", "statistical_test", "finding", "hypothesis", "note"
 ]
@@ -116,9 +132,14 @@ class Premise(_Model):
     text: str
     term: str
     metric_id: str | None = None
-    expectation: Literal["flat", "increase", "decrease"]
+    expectation: PremiseExpectation
     tolerance: float = 0.02
-    """Largest relative change still called flat (2% by default)."""
+    """Largest relative change still called flat (2% by default). For ``meets_plan`` the
+    largest shortfall against plan still called meeting it (1% by default)."""
+    baseline_metric_id: str | None = None
+    """For ``meets_plan`` / ``misses_plan``: the plan, budget or target metric the premise names
+    ("we hit our revenue target"). The premise compares ``metric_id`` with it over the analysis
+    window instead of with a baseline period."""
 
 
 class SegmentComparison(_Model):
@@ -167,6 +188,14 @@ class Interpretation(_Model):
     ranking: Literal["growth", "decline"] | None = None
     """Rank segments by growth rate ("which products grew fastest") instead of by share."""
     period_candidates: list[PeriodCandidate] = Field(default_factory=list)
+    unmeasured_terms: list[str] = Field(default_factory=list)
+    """Concepts the question names that the glossary declares not measured ("net income after tax")."""
+    comparison_defaulted: bool = False
+    """True when the question named no comparison and the previous period was assumed."""
+    plan_role_word: str | None = None
+    """The yardstick word of a comparison against plan ("plan", "budget", "target")."""
+    named_plan_metrics: list[str] = Field(default_factory=list)
+    """Plan metrics the question names ("our revenue target"); they are baselines, not subjects."""
 
     @property
     def is_ambiguous(self) -> bool:
@@ -198,6 +227,9 @@ class PlanContext(_Model):
     ranking: Literal["growth", "decline"] | None = None
     reference_date: date | None = None
     """Date the data is complete to; cohort metrics younger than their maturity are flagged."""
+    plan_metrics: dict[str, str] = Field(default_factory=dict)
+    """Against a plan: each actual metric in the plan's scope -> its governed plan metric
+    (``plan_for``), frozen at planning so a rerun compares with the same plan metrics."""
 
 
 class ExecutionConfig(_Model):
@@ -219,6 +251,11 @@ class ExecutionConfig(_Model):
     row_limit: int = Field(default=10_000, ge=1)
     snapshot_rows: int = Field(default=200, ge=0)
     timeout_s: float = Field(default=30.0, gt=0)
+    related_signals: int = Field(default=3, ge=0, le=10)
+    """Related signals reported at most (0 disables the scan)."""
+    related_min_change: float = Field(default=0.25, ge=0.0)
+    """A related signal must move at least this much (relative change, 0.25 = 25%) in the shared
+    segment, and at least twice as much as the same metric across the whole business."""
 
 
 class PlanStep(_Model):
@@ -350,6 +387,112 @@ class Contribution(_Model):
     rate_effect: float | None = None
 
 
+class ReconciliationLine(_Model):
+    """One component of a reconciled identity, signed in the root metric's units."""
+
+    node_id: str | None = None
+    label: str
+    amount: float
+    metric_id: str | None = None
+
+
+class ReconciliationIdentity(_Model):
+    """``parent_amount = sum(components) + residual``, checked on executed numbers."""
+
+    parent_node_id: str | None = None
+    parent_label: str
+    parent_amount: float
+    components: list[ReconciliationLine] = Field(default_factory=list)
+    sum_of_components: float
+    residual: float
+    reconciled: bool
+    method: str = ""
+
+
+class Reconciliation(_Model):
+    """Does the explanation add back to the change? Carried by the ``reconciliation`` node.
+
+    ``gap`` is the root's change (actual minus plan, or current minus baseline). Every
+    identity lists its components in the root metric's units, so the top identity reads
+    "gross margin + operating expenses = the operating profit miss".
+    """
+
+    metric_id: str
+    metric_label: str
+    metric_format: str | None = None
+    actual: float
+    baseline: float
+    gap: float
+    tolerance: float
+    reconciled: bool
+    identities: list[ReconciliationIdentity] = Field(default_factory=list)
+
+
+class BridgeStep(_Model):
+    """One bar of a plan-to-actual bridge: a reconciled part of the gap, in root units."""
+
+    node_id: str | None = None
+    label: str
+    amount: float
+    group_label: str | None = None
+    group_node_id: str | None = None
+    running_total: float
+
+
+class PlanBridge(_Model):
+    """Plan value -> the reconciled parts of the gap -> actual value (a waterfall).
+
+    The steps are the reconciled children of each first-level part of the explanation (or the
+    part itself when it has none); they sum exactly to ``gap`` when ``reconciled``.
+    """
+
+    metric_id: str
+    metric_label: str
+    metric_format: str | None = None
+    start_label: str = "Plan"
+    start: float
+    end_label: str = "Actual"
+    end: float
+    gap: float
+    steps: list[BridgeStep] = Field(default_factory=list)
+    reconciled: bool
+    tolerance: float = 0.005
+    chart: dict[str, Any] | None = None
+    artifact_id: str | None = None
+
+
+class RelatedSignal(_Model):
+    """A verified observation on another governed metric in a segment where the explanation
+    concentrates. Its relationship to the explained change is not established: it is shown
+    next to the tree, never inside the reconciled explanation. ``node_id`` is the tree node
+    (``role="related_signal"``) that carries status, evidence and lineage."""
+
+    node_id: str
+    metric_id: str
+    metric_label: str
+    metric_format: str | None = None
+    unit: str | None = None
+    title: str
+    statement: str
+    segment_path: list[Segment] = Field(default_factory=list)
+    window: TimeWindow
+    baseline_window: TimeWindow
+    current: float | None = None
+    baseline: float | None = None
+    abs_change: float | None = None
+    pct_change: float | None = None
+    relationship: Literal["not_established"] = "not_established"
+    relationship_note: str
+    shared_with: list[Segment] = Field(default_factory=list)
+    """The explanation segments this signal shares (e.g. region = Gulf Coast)."""
+    linked_node_ids: list[str] = Field(default_factory=list)
+    supporting_node_ids: list[str] = Field(default_factory=list)
+    """Child nodes measuring related metrics in the same segment (e.g. response time)."""
+    artifact_ids: list[str] = Field(default_factory=list)
+    evidence_strength: EvidenceStrength = "strong"
+    provisional: bool = False
+
+
 class TreeNode(_Model):
     id: str
     parent_id: str | None
@@ -359,6 +502,7 @@ class TreeNode(_Model):
     metric_id: str | None = None
     metric_label: str | None = None
     metric_format: str | None = None
+    metric_unit: str | None = None
     segment: Segment | None = None
     segment_path: list[Segment] = Field(default_factory=list)
     dimension: str | None = None
@@ -382,6 +526,29 @@ class TreeNode(_Model):
     """Finding saved from this node (set by the API; carried forward on rerun)."""
     decision_history: list[dict[str, Any]] = Field(default_factory=list)
     """Analyst decisions carried over from earlier runs: ``{run, status, note}``."""
+    title: str | None = None
+    """Short executive label ("Unit costs above plan", "Freight Cost over plan"). The statement
+    carries the numbers; the title is what a reader scans."""
+    role: NodeRole | None = None
+    verdict: Literal["supported", "contradicted"] | None = None
+    """Premise nodes: whether the data supports what the question takes for granted."""
+    root_effect: float | None = None
+    """Signed effect of this node on the root metric (root metric units), for nodes inside an
+    exact decomposition of the root change: children sum to their parent's root effect."""
+    baseline_label: str | None = None
+    """What ``baseline`` is ("Plan", "Q1 2026", "Houston"), so the UI labels the columns."""
+    relationship: Literal["not_established"] | None = None
+    """Related signals only: their relationship to the explained change is not established."""
+    reconciliation: Reconciliation | None = None
+    """Reconciliation nodes only: the identities checked and whether they add back."""
+    method: str | None = None
+    """How the node was measured, in technical terms (identity, counterfactual, rates held at
+    plan). The statement stays in plain language; this is the one-click-away methodology."""
+    members: list[ReconciliationLine] = Field(default_factory=list)
+    """"Other lines, net" nodes: the immaterial lines grouped into this node."""
+    offset_node_id: str | None = None
+    """A drill segment offset by a sibling line in the same segment (overtime over plan in a
+    branch where payroll came in under plan): that sibling segment's node."""
 
 
 class InvestigationTree(_Model):
@@ -460,6 +627,13 @@ class Investigation(_Model):
     engine_version: str = ENGINE_VERSION
     model_snapshot_hash: str | None = None
     run_config: dict[str, Any] = Field(default_factory=dict)
+    related_signals: list[RelatedSignal] = Field(default_factory=list)
+    """Verified observations next to the explanation, relationship not established (see
+    :class:`RelatedSignal`). Each one is also a tree node with ``role="related_signal"``."""
+    bridge: PlanBridge | None = None
+    """Plan-to-actual bridge of a gap to plan (see :class:`PlanBridge`)."""
+    brief_lead: str | None = None
+    """Two or three short sentences leading the brief: the gap, its split, the largest causes."""
 
 
 class InvestigationRun(_Model):
@@ -527,6 +701,9 @@ class Summary(_Model):
     observations: list[SummaryItem] = Field(default_factory=list)
     supported_explanations: list[SummaryItem] = Field(default_factory=list)
     hypotheses: list[SummaryItem] = Field(default_factory=list)
+    related_signals: list[SummaryItem] = Field(default_factory=list)
+    """Confirmed related signals: observations whose relationship to the explained change is not
+    established. Listed apart from explanations, and never worded as causes."""
     excluded_count: int = 0
     narrative: str | None = None
     narrative_source: Literal["template", "llm_verified"] = "template"
@@ -534,11 +711,14 @@ class Summary(_Model):
 
     def to_markdown(self) -> str:
         parts: list[str] = []
-        for title, items in (
+        sections = [
             ("Observed facts", self.observations),
             ("Supported explanations", self.supported_explanations),
             ("Unresolved hypotheses", self.hypotheses),
-        ):
+        ]
+        if self.related_signals:
+            sections.insert(2, ("Related signals (relationship not established)", self.related_signals))
+        for title, items in sections:
             parts.append(f"### {title}")
             if items:
                 parts.extend(f"- {i.text}" for i in items)

@@ -12,13 +12,14 @@ import datetime as dt
 import uuid
 from typing import Any
 
-from analystos_investigator import FindingInput, executive_summary
+from analystos_investigator import FindingInput, executive_summary, variance_review
 from analystos_investigator import Investigation as EngineInvestigation
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..errors import NotFound, Unprocessable
 from ..models import ArtifactRecord, Dataset, DatasetVersion, Finding, Report, Workspace
+from ..models import Investigation as InvestigationRecord
 from ..state import AppState
 from .ai import get_llm
 from .investigations import engine_run, filter_context, reference_date
@@ -183,6 +184,124 @@ def _chart_provenance(art: ArtifactRecord, by_engine_id: dict[str | None, Artifa
     }
 
 
+def accepted_node_ids(doc: EngineInvestigation, findings: list[Finding]) -> set[str]:
+    """Nodes whose evidence the analyst accepted: confirmed nodes and confirmed findings' nodes,
+    minus anything rejected."""
+    ids = {n.id for n in doc.tree.nodes if n.status == "confirmed"}
+    ids |= {f.node_id for f in findings if f.status == "confirmed" and f.node_id}
+    ids -= {f.node_id for f in findings if f.status == "rejected" and f.node_id}
+    return ids
+
+
+def review_block(review: Any, investigation_id: str) -> dict[str, Any]:
+    """The operating review of a gap to plan, from accepted evidence only (see ``variance_review``)."""
+    return block(
+        "narrative",
+        title=review.title,
+        label="Operating review",
+        markdown=review.markdown
+        + "\n\n*Built only from confirmed findings of the investigation; every number is a value computed by the "
+        "analytical engine. Related signals are observations whose relationship to the gap is not established.*",
+        investigation_id=investigation_id,
+        node_ids=review.node_ids,
+        reconciled=review.reconciled,
+        complete=review.complete,
+        pending=review.pending,
+        headline=review.headline,
+        premise=" ".join(review.premises) or None,
+        premises=review.premises,
+        causes=review.causes,
+        related=review.related,
+        watch=review.watch,
+    )
+
+
+def review_blocks(review: Any, investigation_id: str) -> list[dict[str, Any]]:
+    """The review memo: the narrative block, then the plan-to-actual bridge as a waterfall block
+    and as a table (steps from plan to actual with running totals)."""
+    out = [review_block(review, investigation_id)]
+    bridge = review.bridge
+    if bridge is None or not bridge.steps:
+        return out
+    steps = [s.model_dump(mode="json") for s in bridge.steps]
+    out.append(
+        block(
+            "bridge",
+            title=f"{bridge.metric_label}: plan to actual",
+            metric_id=bridge.metric_id,
+            metric_label=bridge.metric_label,
+            format=bridge.metric_format,
+            start_label=bridge.start_label,
+            start=bridge.start,
+            end_label=bridge.end_label,
+            end=bridge.end,
+            gap=bridge.gap,
+            steps=steps,
+            reconciled=bridge.reconciled,
+            option=bridge.chart,
+            investigation_id=investigation_id,
+        )
+    )
+    rows = [[bridge.start_label, None, bridge.start]]
+    rows += [[s.label, s.amount, s.running_total] for s in bridge.steps]
+    rows.append([bridge.end_label, bridge.gap, bridge.end])
+    out.append(
+        block(
+            "table",
+            title="Plan to actual",
+            result={
+                "columns": [
+                    {"name": "step", "type": "VARCHAR"},
+                    {"name": "effect", "type": "DOUBLE"},
+                    {"name": "running_total", "type": "DOUBLE"},
+                ],
+                "rows": rows,
+                "row_count": len(rows),
+                "truncated": False,
+                "elapsed_ms": 0.0,
+                "sql": None,
+            },
+            note="Each step is a reconciled part of the gap; the steps add up exactly to actual minus plan.",
+        )
+    )
+    return out
+
+
+def _plan_metric(model: Any, metric_id: str) -> str | None:
+    """The plan counterpart of a KPI: the metric with ``plan_for`` tagged ``plan`` (else the only one)."""
+    cands = model.plan_metrics_for(metric_id)
+    tagged = [c for c in cands if "plan" in {t.lower() for t in c.tags}]
+    pick = tagged if len(tagged) == 1 else cands
+    return pick[0].id if len(pick) == 1 else None
+
+
+def _plan_review(db: Session, ws: Workspace, window: Any) -> tuple[Any, str] | None:
+    """The operating review of the latest completed plan investigation over exactly ``window``."""
+    invs = db.scalars(
+        select(InvestigationRecord)
+        .where(InvestigationRecord.workspace_id == ws.id, InvestigationRecord.status == "completed")
+        .order_by(InvestigationRecord.updated_at.desc())
+    )
+    for inv in invs:
+        try:
+            doc = EngineInvestigation.model_validate(inv.document)
+        except ValueError:
+            continue
+        ctx = doc.plan.context if doc.plan else None
+        if (
+            ctx is None
+            or not ctx.plan_metrics
+            or ctx.window.start != window.start
+            or ctx.window.end != window.end
+        ):
+            continue
+        findings = list(db.scalars(select(Finding).where(Finding.investigation_id == inv.id)))
+        review = variance_review(doc, accepted_node_ids(doc, findings))
+        if review is not None:
+            return review, inv.id
+    return None
+
+
 def report_from_investigation(
     db: Session, state: AppState, ws: Workspace, inv: Any, user_id: str | None, *, persist: bool = True
 ) -> Report:
@@ -204,17 +323,26 @@ def report_from_investigation(
         for a in db.scalars(select(ArtifactRecord).where(ArtifactRecord.run_id == inv.current_run_id))
     }
     llm = get_llm(state, ws, investigation_id=inv.id)
+    review = variance_review(doc, accepted_node_ids(doc, findings))
     blocks: list[dict[str, Any]] = [
-        block("heading", text=inv.question),
-        block(
-            "narrative",
-            title="Unconfirmed analysis",
-            label="Unconfirmed analysis",
-            markdown="**Unconfirmed analysis.** "
-            + (doc.brief_answer or root.statement)
-            + "\n\n*This answer is generated from the investigation tree and has not been confirmed by an "
-            "analyst; confirmed findings are listed separately. Numbers are computed by the analytical engine; "
-            "see Methodology and Sources.*",
+        block("heading", text=review.title if review else inv.question),
+        *(review_blocks(review, inv.id) if review else []),
+        # the whole analysis again, unconfirmed, only while the review is not complete
+        *(
+            []
+            if review is not None and review.complete
+            else [
+                block(
+                    "narrative",
+                    title="Unconfirmed analysis",
+                    label="Unconfirmed analysis",
+                    markdown="**Unconfirmed analysis.** "
+                    + (doc.brief_answer or root.statement)
+                    + "\n\n*This answer is generated from the investigation tree and has not been confirmed by an "
+                    "analyst; confirmed findings are listed separately. Numbers are computed by the analytical "
+                    "engine; see Methodology and Sources.*",
+                )
+            ]
         ),
         summary_block(
             findings,
@@ -234,6 +362,7 @@ def report_from_investigation(
             format=root.metric_format,
             period=ctx.window.display() if ctx else None,
             baseline_period=ctx.baseline.display() if ctx else None,
+            baseline_label=root.baseline_label,
             filter_context=filter_context(
                 window=ctx.window if ctx else None,
                 baseline=ctx.baseline if ctx else None,
@@ -241,6 +370,25 @@ def report_from_investigation(
             ),
             artifact_ids=[arts[a].id for a in root.artifact_ids if a in arts],
         ),
+        *[
+            block(
+                "kpi",
+                metric_id=n.metric_id,
+                label=n.metric_label or n.metric_id,
+                value=n.current,
+                baseline=n.baseline,
+                abs_change=n.abs_change,
+                pct_change=n.pct_change,
+                format=n.metric_format,
+                period=ctx.window.display() if ctx else None,
+                baseline_label=n.baseline_label,
+                verdict=n.verdict,
+                note=n.title,
+                artifact_ids=[arts[a].id for a in n.artifact_ids if a in arts],
+            )
+            for n in doc.tree.children_of(root.id)
+            if n.role == "premise"
+        ],
     ]
     charted: set[str] = set()
     for node in [
@@ -355,7 +503,7 @@ def report_from_investigation(
     )
     rep = Report(
         workspace_id=ws.id,
-        title=f"Report: {inv.title}"[:400],
+        title=(review.title if review else f"Report: {inv.title}")[:400],
         kind="investigation",
         status="draft",
         investigation_id=inv.id,
@@ -503,8 +651,33 @@ def business_review(
         except Exception:  # noqa: BLE001 - a metric that cannot be compared is reported, not guessed
             continue
         m = model.get_metric(mid)
+        plan_fields: dict[str, Any] = {}
+        plan_id = _plan_metric(model, mid)
+        if plan_id is not None and pop.current is not None:
+            try:
+                from analystos_engine.semantic.compiler import MetricQuery, run_metric_query
+
+                ptdim = time_dimension_for_metric(model, plan_id)
+                compiled, plan_res = run_metric_query(
+                    store, model, MetricQuery(metrics=[plan_id], time=window.with_dimension(ptdim)), limit=5
+                )
+                row = plan_res.to_records()[0] if plan_res.rows else {}
+                plan_value = float(row[plan_id]) if row.get(plan_id) is not None else None
+            except Exception:  # noqa: BLE001 - a plan that cannot be measured is left out, not guessed
+                plan_value = None
+            if plan_value is not None:
+                variance = pop.current - plan_value
+                plan_fields = {
+                    "plan_metric_id": plan_id,
+                    "plan_label": model.get_metric(plan_id).display_name,
+                    "plan": plan_value,
+                    "plan_variance": variance,
+                    "plan_variance_pct": variance / abs(plan_value) if plan_value else None,
+                    "plan_sql": compiled.sql,
+                }
         kpis.append(
             {
+                **plan_fields,
                 "metric_id": mid,
                 "label": m.display_name,
                 "format": m.format,
@@ -534,12 +707,16 @@ def business_review(
         + (f", {lead['label']} first." if lead else ".")
     ]
     for k in kpis[:5]:
+        vs_plan = f"{pct(k['plan_variance_pct'])} vs plan, " if k.get("plan") is not None else ""
         intro.append(
-            f"- {k['label']}: {fmt(k['value'], k['format'])} ({pct(k['pct_change'])} vs prior period, "
+            f"- {k['label']}: {fmt(k['value'], k['format'])} ({vs_plan}{pct(k['pct_change'])} vs prior period, "
             f"{pct(k['yoy_pct_change'])} YoY)."
         )
     intro.append("\n*Draft generated from computed values; review before publishing.*")
     blocks.append(block("narrative", markdown="\n".join(intro)))
+    plan_review = _plan_review(db, ws, window)
+    if plan_review is not None:
+        blocks.extend(review_blocks(*plan_review))
     blocks.append(block("kpi_overview", title="KPI overview", items=kpis))
     changes = [k for k in kpis if k["pct_change"] is not None]
     kpi_queries = [

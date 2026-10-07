@@ -1,7 +1,7 @@
 # AnalystOS analytical benchmark (spec §81, §83) on the Summit Supply Co. demo.
 #
 # Every question runs through the deterministic investigator (no LLM) against the loaded demo
-# workspace with today = 2026-09-18. Each expectation names evidence that must appear in the
+# workspace with today = 2026-09-30. Each expectation names evidence that must appear in the
 # investigation tree; `required: true` expectations fail the eval, the rest are scored.
 # Numbers come from scenarios.json (the answer key measured from the data), never from here.
 #
@@ -24,6 +24,21 @@
 #   ranked_growth a breakdown ranked by growth rate exists (optionally for `dimension`, fastest `first`)
 #   discount_effect  the discount-rate check reports the rate change and its revenue effect (answer key kpis)
 #   mix           a ratio segment's mix effect has the given sign
+#   plan_premise  a premise node (role premise) measured against a plan metric: verdict and values vs the key
+#   plan_headline the root compares the metric with its plan: actual, plan and variance vs the key ($1)
+#   variance_part a first-level variance node for `metric` whose effect on the root matches `effect_key`
+#   reconciled    the reconciliation node says every identity adds back (and the parts sum to the gap)
+#   bridge_effect a plan-bridge effect (unit_cost | discount | rest) matches `key` (optional sign)
+#   bridge_segment a segment inside a bridge effect (optionally within a parent segment) matches its row in
+#                 `list_key` (by `match`) and ranks within `max_rank`
+#   variance_line an operating-expense line's effect on the root matches its row in `list_key`
+#   variance_drill the largest segment of a variance drill of `metric` is the key's largest row
+#   related_signal a related signal matches the key's segment, values and supporting metric, is labelled
+#                 relationship not established and is not a component of any reconciled identity
+#   no_causal_claim the brief states every related signal as not established and never as a cause
+#   rerun_empty   rerunning the investigation reproduces it with an empty diff
+#   plan_review   an operating review built from the confirmed explanation reconciles and keeps the related
+#                 signal as not established
 #
 # Every spec §83 wording is asked literally (review R-28); rephrasings are kept only as extra
 # questions. Nothing is marked "required: false" because the engine could not do it.
@@ -53,7 +68,8 @@ questions:
       - {id: no_aov_shares_by_product, kind: no_overlap_shares, metrics: [aov, orders_per_customer],
          dimensions: [category, product, product_tier, sku, subcategory], required: true}
       - {id: brief_names_dallas_and_customer, kind: brief_contains,
-         texts: ["Dallas accounts for 49% of the Revenue change", "Trinity Ridge Construction"], required: true}
+         texts: ["Dallas accounts for {share:dallas.share_of_change} of the Revenue change", "Trinity Ridge Construction"],
+         required: true}
       - {id: traceable, kind: traceable, required: true}
 
   - id: region_driver
@@ -81,7 +97,7 @@ questions:
     choices: {margin: gross_margin_pct}
     expect:
       - {id: margin_is_ambiguous, kind: ambiguity, term: margin,
-         candidates: [gross_margin, gross_margin_pct, contribution_margin, operating_margin], required: true}
+         candidates: [gross_margin, gross_margin_pct, contribution_margin, operating_profit], required: true}
       - {id: period_where_revenue_flat, kind: period, required: true}
       - {id: premise_holds, kind: premise, holds: true, required: true}
       - {id: gm_pct_down, kind: headline, metric: gross_margin_pct, direction: down, required: true}
@@ -168,37 +184,124 @@ questions:
       - {id: snapshot_values, kind: headline_values, current_key: headline.inventory_value_current,
          baseline_key: headline.inventory_value_baseline, required: true}
 
-  - id: forecast_miss
-    benchmark: "What caused the forecast miss? (rephrased)"
-    question: "Why was Q2 2026 revenue below forecast?"
-    story: forecast_miss_q2_2026
+  - id: operating_profit_miss
+    benchmark: "Sales made their number, net profit missed its target: what happened? (CEO flagship, literal)"
+    question: "We made our sales number last quarter, but we missed our target for net profit. What happened?"
+    story: operating_profit_miss_q2_2026
     expect:
-      - {id: below_forecast, kind: headline, metric: revenue, direction: down, required: true}
-      - {id: contractor, kind: segment, dimension: segment, value: Contractor, direction: down, max_rank: 1,
+      - {id: plan_comparison, kind: comparison, comparison_kind: budget, baseline_metric: plan_operating_profit,
          required: true}
-      - {id: gulf_coast, kind: segment, dimension: region, value: Gulf Coast, direction: down, max_rank: 1,
+      - {id: closed_quarter, kind: period, required: true}
+      - {id: premise_supported, kind: plan_premise, metric: revenue, verdict_key: premise.verdict,
+         actual_key: premise.actual, plan_key: premise.plan, tolerance: 1.0, required: true}
+      - {id: op_vs_plan, kind: plan_headline, metric: operating_profit, actual_key: headline.operating_profit_actual,
+         plan_key: headline.operating_profit_plan, variance_key: headline.operating_profit_variance, required: true}
+      - {id: gross_margin_part, kind: variance_part, metric: gross_margin, effect_key: bridge.gross_margin.variance,
          required: true}
-      - {id: central_texas, kind: segment, dimension: region, value: Central Texas, direction: down,
+      - {id: opex_part, kind: variance_part, metric: operating_expenses,
+         effect_key: bridge.operating_expenses.effect_on_operating_profit, required: true}
+      - {id: reconciles, kind: reconciled, required: true}
+      - {id: unit_cost_effect, kind: bridge_effect, effect: unit_cost, key: gross_margin_bridge.unit_cost_effect,
          required: true}
+      - {id: discount_effect, kind: bridge_effect, effect: discount, key: gross_margin_bridge.discount_effect,
+         required: true}
+      - {id: favorable_mix_offset, kind: bridge_effect, effect: rest, key: gross_margin_bridge.mix_effect,
+         sign: positive, required: true}
+      - {id: lumber_cost, kind: bridge_segment, effect: unit_cost, dimension: category, value: Lumber,
+         list_key: unit_cost_effect_by_category, match: category, max_rank: 1, required: true}
+      - {id: roofing_cost, kind: bridge_segment, effect: unit_cost, dimension: category, value: Roofing,
+         list_key: unit_cost_effect_by_category, match: category, max_rank: 2, required: true}
+      - {id: contractor_discounting, kind: bridge_segment, effect: discount, dimension: segment, value: Contractor,
+         list_key: discount_effect_by_segment, match: segment, max_rank: 1, required: true}
+      - {id: gulf_coast_within_contractor, kind: bridge_segment, effect: discount, dimension: region,
+         value: Gulf Coast, within: {segment: Contractor}, list_key: contractor_discount_effect_by_region,
+         match: region, max_rank: 1, required: true}
+      - {id: freight_overrun, kind: variance_line, metric: freight_cost, list_key: operating_expense_lines,
+         max_rank: 1, required: true}
+      - {id: overtime_overrun, kind: variance_line, metric: overtime, list_key: operating_expense_lines,
+         max_rank: 2, required: true}
+      - {id: payroll_offset, kind: variance_line, metric: payroll, list_key: operating_expense_lines, required: true}
+      - {id: overtime_by_branch, kind: variance_drill, metric: overtime, dimension: branch,
+         list_key: labor.by_branch, match: branch, field: overtime_variance, required: true}
+      - {id: plan_to_actual_bridge, kind: plan_bridge, start_key: headline.operating_profit_plan,
+         end_key: headline.operating_profit_actual,
+         steps: [{label: Unit-cost inflation, key: gross_margin_bridge.unit_cost_effect},
+                 {label: Increased discounting, key: gross_margin_bridge.discount_effect},
+                 {label: Favorable volume and mix, key: gross_margin_bridge.mix_effect},
+                 {metric: freight_cost, key: freight.freight_cost.variance, negate: true},
+                 {metric: labor_cost, key: labor.labor_cost.variance, negate: true},
+                 {label: "Other lines, net", key: operating_expense_groups.other_lines_variance, negate: true}],
+         required: true}
+      - {id: lumber_by_supplier, kind: below_grain, effect: unit_cost, within: {category: Lumber},
+         dimension: supplier, list_key: lumber_unit_cost_by_supplier, match: supplier, mix_row: supplier_mix,
+         required: true}
+      - {id: roofing_not_split, kind: below_grain, effect: unit_cost, within: {category: Roofing},
+         dimension: supplier, expect_none: true, required: true}
+      - {id: fuel_surcharge_split, kind: nested_split, metric: freight_cost,
+         children: [{metric: fuel_surcharge, key: freight.fuel_surcharge.variance},
+                    {metric: base_freight, key: freight.base_freight.variance}],
+         dominant: fuel_surcharge, required: true}
+      - {id: labor_split, kind: nested_split, metric: labor_cost,
+         children: [{metric: overtime, key: labor.overtime.variance}, {metric: payroll, key: labor.payroll.variance}],
+         dominant: overtime, required: true}
+      - {id: overtime_offset_same_branches, kind: same_segment_offset, adverse: overtime, offset: payroll,
+         dimension: branch, list_key: labor.by_branch, match: branch, adverse_field: overtime_variance,
+         offset_field: payroll_variance, top: 2, required: true}
+      - {id: other_lines_grouped, kind: other_lines, parent: operating_expenses,
+         members_key: operating_expense_groups.other_lines, key: operating_expense_groups.other_lines_variance,
+         required: true}
+      - {id: opex_evidence_strong, kind: evidence, metric: operating_expenses, strength: strong, required: true}
+      - {id: no_jargon, kind: no_jargon, terms: ["per list dollar", "plan cell", "counterfactual", "cost basis"],
+         required: true}
+      - {id: brief_lead, kind: brief_lead, max_sentences: 3,
+         texts: ["{supplier:lumber_unit_cost_by_supplier.0.supplier}", "fuel surcharge", "Gulf Coast"],
+         required: true}
+      - {id: related_signal_not_established, kind: related_signal, key: related_signals.0, required: true}
+      - {id: no_causal_claim, kind: no_causal_claim, required: true}
+      - {id: brief_reconciled_sentence, kind: brief_contains,
+         texts: ["reconciles exactly", "Related signal, relationship not established",
+                 "does not establish it as a cause"], required: true}
+      - {id: traceable, kind: traceable, required: true}
+      - {id: rerun_empty_diff, kind: rerun_empty, required: true}
+      - {id: review_from_confirmed_findings, kind: plan_review, required: true}
 
-  - id: forecast_miss_spec_phrasing
-    benchmark: "What caused the forecast miss? (spec wording, literal)"
-    question: "What caused the forecast miss?"
-    story: forecast_miss_q2_2026
+  - id: operating_profit_miss_formal
+    benchmark: "The flagship in analyst wording"
+    question: "We hit our revenue target last quarter, but operating profit missed plan badly. What happened?"
+    story: operating_profit_miss_q2_2026
     expect:
-      - {id: forecast_comparison, kind: comparison, comparison_kind: forecast, baseline_metric: forecast_revenue,
+      - {id: plan_comparison, kind: comparison, comparison_kind: budget, baseline_metric: plan_operating_profit,
          required: true}
-      - {id: below_forecast, kind: headline, metric: revenue, direction: down, required: true}
+      - {id: premise_supported, kind: plan_premise, metric: revenue, verdict_key: premise.verdict,
+         actual_key: premise.actual, plan_key: premise.plan, tolerance: 1.0, required: true}
+      - {id: op_vs_plan, kind: plan_headline, metric: operating_profit, actual_key: headline.operating_profit_actual,
+         plan_key: headline.operating_profit_plan, variance_key: headline.operating_profit_variance, required: true}
+      - {id: reconciles, kind: reconciled, required: true}
 
-  - id: forecast_miss_q2
-    benchmark: "What caused the forecast miss? (spec wording with the story's period)"
-    question: "What caused the forecast miss in Q2 2026?"
-    story: forecast_miss_q2_2026
+  - id: operating_profit_miss_plain
+    benchmark: "Operating profit against plan, period stated"
+    question: "Why did operating profit miss plan in Q2 2026?"
+    story: operating_profit_miss_q2_2026
     expect:
-      - {id: below_forecast, kind: headline, metric: revenue, direction: down, required: true}
-      - {id: contractor, kind: segment, dimension: segment, value: Contractor, direction: down, max_rank: 1,
+      - {id: op_vs_plan, kind: plan_headline, metric: operating_profit, actual_key: headline.operating_profit_actual,
+         plan_key: headline.operating_profit_plan, variance_key: headline.operating_profit_variance, required: true}
+      - {id: reconciles, kind: reconciled, required: true}
+      - {id: unit_cost_effect, kind: bridge_effect, effect: unit_cost, key: gross_margin_bridge.unit_cost_effect,
          required: true}
-      - {id: brief_largest_segment, kind: brief_contains, texts: ["Gulf Coast"], required: true}
+      - {id: discount_effect, kind: bridge_effect, effect: discount, key: gross_margin_bridge.discount_effect,
+         required: true}
+      - {id: traceable, kind: traceable, required: true}
+
+  - id: operating_profit_gap_explains
+    benchmark: "Operating profit against plan, answer-key wording"
+    question: "Operating profit vs plan last quarter: what explains the gap?"
+    story: operating_profit_miss_q2_2026
+    expect:
+      - {id: plan_comparison, kind: comparison, comparison_kind: budget, baseline_metric: plan_operating_profit,
+         required: true}
+      - {id: op_vs_plan, kind: plan_headline, metric: operating_profit, actual_key: headline.operating_profit_actual,
+         plan_key: headline.operating_profit_plan, variance_key: headline.operating_profit_variance, required: true}
+      - {id: reconciles, kind: reconciled, required: true}
 
   - id: conversion_decline
     benchmark: "Why did conversion decline while lead volume held?"

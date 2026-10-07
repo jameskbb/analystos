@@ -307,6 +307,24 @@ TEMPLATES: dict[str, InvestigationTemplate] = {
             explicit_only=True,
         ),
         InvestigationTemplate(
+            id="plan_variance",
+            name="Variance to plan",
+            description="Compare every node of the metric's tree with its governed plan counterpart, split the "
+            "variance exactly (margin into unit cost, discounting and mix), locate the segments behind each "
+            "material variance, check that the parts add back to the gap, and list related operating signals "
+            "separately.",
+            metric_roles=[],
+            intents=["why_change", "compare"],
+            comparison_kinds=["budget", "forecast"],
+            dimension_roles=["geography", "customer_segment", "product", "channel", "sales_team"],
+            drill_roles=["geography", "customer_segment", "product"],
+            dimension_priority=["region", "segment", "category", "branch"],
+            max_dimensions=1,
+            untestable_hypotheses=["the plan's assumptions were optimistic for reasons outside the data"],
+            seasonality_check=False,
+            explicit_only=True,
+        ),
+        InvestigationTemplate(
             id="forecast_miss",
             name="Forecast miss",
             description="Compare actuals with forecast and find the segments where the gap is concentrated.",
@@ -358,6 +376,11 @@ def choose_template(interp: Interpretation, model: SemanticModel) -> Investigati
     if mid is None or not model.has_metric(mid):
         return TEMPLATES["general_change"]
     metric = model.get_metric(mid)
+    if interp.comparison_kind in ("budget", "forecast") and interp.intent in ("why_change", "compare"):
+        from .plans import has_plan_tree
+
+        if has_plan_tree(model, mid, interp.baseline_metric_id):
+            return TEMPLATES["plan_variance"]
     geo_breakdown = any(
         "geography" in dimension_roles(model.get_dimension(d))
         for d in interp.breakdown_dimensions

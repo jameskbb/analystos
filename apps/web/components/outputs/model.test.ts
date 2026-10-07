@@ -9,6 +9,8 @@ import {
   dateRangeFor,
   editBlock,
   latestFullMonth,
+  latestFullQuarter,
+  recentQuarters,
   moveBlock,
   nudgeLayout,
   placeTile,
@@ -40,6 +42,12 @@ describe("date presets", () => {
     expect(presetRange("last_month", new Date(Date.UTC(2026, 0, 5)))).toEqual({ start: "2025-12-01", end: "2025-12-31" });
     expect(latestFullMonth(new Date(Date.UTC(2026, 0, 5)))).toBe("2025-12");
     expect(latestFullMonth(today)).toBe("2026-08");
+  });
+
+  it("names the latest complete quarters, across a year boundary", () => {
+    expect(latestFullQuarter(new Date(Date.UTC(2026, 8, 18)))).toBe("Q2 2026");
+    expect(latestFullQuarter(new Date(Date.UTC(2026, 6, 1)))).toBe("Q2 2026");
+    expect(recentQuarters(new Date(Date.UTC(2026, 1, 3)), 3)).toEqual(["Q4 2025", "Q3 2025", "Q2 2025"]);
   });
 
   it("round-trips request bodies for the server calendar", () => {

@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { ArrowDown, ArrowUp, Play, Plus, Trash2, AlertTriangle, RefreshCw } from "lucide-react";
 import type { AnalysisPlan, Investigation, PlanStepKind } from "@/lib/api/types";
 import { dimensions as dimensionsApi, investigations, isJobAccepted, waitForJob } from "@/lib/api/endpoints";
+import { glossary as glossaryApi } from "@/lib/api/resources/semantic";
 import { qk } from "@/lib/api/keys";
 import { useWorkspace } from "@/components/providers/workspace";
 import { FilterChips } from "@/components/analysis/filter-chips";
@@ -16,7 +17,7 @@ import { Input, NativeSelect, Textarea } from "@/components/ui/input";
 import { InlineError } from "@/components/states/states";
 import { humanize } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import { addStep, moveStep, planProblems, removeStep, STEP_KINDS, toggleStep, updateStep } from "./plan";
+import { addStep, enginePicksDimensions, moveStep, planProblems, premiseExpectation, removeStep, resolvedTerms, STEP_KINDS, stepKindLabel, toggleStep, updateStep } from "./plan";
 import { candidateInfo, contextChips, periodCandidateLabel, windowLabel } from "./model";
 
 const INTENT_LABEL: Record<string, string> = {
@@ -30,8 +31,11 @@ const INTENT_LABEL: Record<string, string> = {
 };
 
 function Interpretation({ inv, onResolve, resolving }: { inv: Investigation; onResolve: (term: string, metricId: string) => void; resolving: boolean }) {
+  const { id: ws } = useWorkspace();
+  const gloss = useQuery({ queryKey: qk.glossary(ws), queryFn: () => glossaryApi.list(ws) });
   const i = inv.interpretation;
   if (!i) return null;
+  const terms = resolvedTerms(i, gloss.data ?? []);
   return (
     <Panel title="How AnalystOS read your question" description={inv.question}>
       <div className="flex flex-col gap-3 p-3">
@@ -47,10 +51,25 @@ function Interpretation({ inv, onResolve, resolving }: { inv: Investigation; onR
           ))}
           {i.comparison_kind && i.comparison_kind !== "none" ? (
             <span className="text-xs text-fg-subtle">
-              compared {i.comparison_kind === "yoy" ? "year over year" : i.comparison_kind === "pop" ? "with the previous period" : i.comparison_kind === "segment" ? "vs segment" : `with ${i.comparison_kind}`}
+              compared {i.comparison_kind === "yoy" ? "year over year" : i.comparison_kind === "pop" ? "with the previous period" : i.comparison_kind === "segment" ? "vs segment" : i.comparison_kind === "budget" ? "with plan" : `with ${i.comparison_kind}`}
             </span>
           ) : null}
         </div>
+        {terms.length ? (
+          <div className="rounded border border-accent/30 bg-accent-soft px-3 py-2" role="group" aria-label="Resolved terms">
+            <div className="text-xs font-medium text-accent-soft-fg">Your words, read against the governed vocabulary</div>
+            <ul className="mt-1 flex flex-col gap-1.5 text-sm">
+              {terms.map((t) => (
+                <li key={t.phrase} data-testid="resolved-term">
+                  <span>“{t.phrase}”</span> <span className="text-fg-subtle">→</span>{" "}
+                  <span className="font-semibold">{humanize(t.metricId)}</span>
+                  {t.glossaryTerm ? <span className="text-xs text-fg-muted"> · glossary term “{t.glossaryTerm}”</span> : t.via ? <span className="text-xs text-fg-muted"> · {t.via}</span> : null}
+                  {t.definition ? <p className="mt-0.5 text-xs text-fg-muted">{t.definition}</p> : null}
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
         <FilterChips items={contextChips(i)} />
         {i.segment_comparison ? (
           <p className="text-xs text-fg-muted">
@@ -67,8 +86,7 @@ function Interpretation({ inv, onResolve, resolving }: { inv: Investigation; onR
                 <li key={k}>
                   “{p.text}”{" "}
                   <span className="text-xs text-fg-subtle">
-                    ({humanize(p.metric_id ?? p.term)} {p.expectation === "flat" ? `within ±${Math.round((p.tolerance ?? 0.02) * 100)}%` : p.expectation}); checked
-                    against the data, not taken as given
+                    ({premiseExpectation(p)}); checked against the data, not taken as given
                   </span>
                 </li>
               ))}
@@ -252,15 +270,17 @@ export function PlanEditor({ investigation, canEdit }: { investigation: Investig
                           value={s.title}
                           onChange={(e) => edit(updateStep(plan, s.id, { title: e.target.value }))}
                           aria-label="Step title"
-                          className="h-6 max-w-md border-transparent px-1 font-medium hover:border-border focus:border-border-strong"
+                          className="h-6 min-w-0 flex-1 border-transparent px-1 font-medium hover:border-border focus:border-border-strong"
                           disabled={!canEdit}
                         />
-                        <Badge tone="neutral">{STEP_KINDS.find((k) => k.kind === s.kind)?.label ?? s.kind}</Badge>
+                        <Badge tone="neutral">{stepKindLabel(s.kind)}</Badge>
                         {s.origin ? <Badge tone="outline">{humanize(s.origin)}</Badge> : null}
                         {s.estimated_queries ? <span className="text-2xs text-fg-subtle tabular">~{s.estimated_queries} queries</span> : null}
                       </div>
                       {s.rationale ? <p className="mt-0.5 px-1 text-xs text-fg-subtle">{s.rationale}</p> : null}
-                      {s.kind === "contribution" || s.kind === "segment" ? (
+                      {enginePicksDimensions(s) ? (
+                        <p className="mt-1 px-1 text-xs text-fg-subtle">Dimensions: chosen per material variance from those the actuals and the plan share.</p>
+                      ) : s.kind === "contribution" || s.kind === "segment" ? (
                         <label className="mt-1.5 flex items-center gap-2 px-1 text-xs">
                           <span className="text-fg-subtle">Dimension</span>
                           <NativeSelect

@@ -28,6 +28,8 @@ DQ_RULES_PATH = DATA_PACKAGE_DIR / "dq_rules.yaml"
 TABLES: tuple[str, ...] = (
     "regions",
     "customer_segments",
+    "product_categories",
+    "suppliers",
     "branches",
     "sales_reps",
     "customers",
@@ -39,11 +41,12 @@ TABLES: tuple[str, ...] = (
     "inventory_snapshots",
     "leads",
     "opportunities",
-    "revenue_forecast",
     "budgets_branch",
     "budgets_category",
     "targets",
     "operating_expenses",
+    "sales_plan",
+    "opex_plan",
 )
 
 # Columns that must stay text even when most values look like another type (messy on purpose).

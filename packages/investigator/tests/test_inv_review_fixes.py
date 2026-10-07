@@ -320,7 +320,7 @@ def test_premise_picks_the_period_where_revenue_is_flat_and_bridge_splits_margin
     assert inv.status == "completed", inv.failures
     interp = inv.interpretation
     assert interp.metric_ids[0] == "gross_margin_pct"
-    assert [p.metric_id for p in interp.premises] == ["revenue"]
+    assert [p.metric_id for p in interp.premises if p.metric_id != interp.metric_ids[0]] == ["revenue"]
     # The default (June vs May 2026) has no data; Q2 2026 vs Q2 2025 is where revenue is flat.
     assert (interp.window.start, interp.baseline.start) == (dt.date(2026, 4, 1), dt.date(2025, 4, 1))
     assert interp.comparison_kind == "yoy"

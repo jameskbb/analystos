@@ -20,7 +20,7 @@ def results(store: Any, model: Any, scenarios: dict[str, Any], gt: Any) -> dict[
     labels: dict[str, set[str]] = {}
     for pid, name, sku in gt.execute("SELECT product_id, product_name, sku FROM products").fetchall():
         labels[pid] = {name, sku, pid}
-    scorer = Scorer(scenarios, labels)
+    scorer = Scorer(scenarios, labels, store, model)
     value_index = build_value_index(store, model)
     today = dt.date.fromisoformat(TODAY)
     return {q["id"]: run_question(q, store, model, value_index, scorer, today) for q in BENCHMARK}

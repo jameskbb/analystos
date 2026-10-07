@@ -23,7 +23,7 @@ those missing, the same endpoints take the deterministic path and nothing is sen
 | New investigation (no explicit template) | Runs the staged orchestrator below: suggests a choice for an ambiguous term, may add up to 3 validated plan dimensions (`origin: llm`), may run the bounded tool loop (only when the workspace enables **Allow the tool loop**), and words the brief answer and follow-ups. The tree itself is always built by the deterministic executor from executed queries. The stages, tool calls and any rejected outputs are returned as `Investigation.orchestration` and shown in the evidence panel. | `apps/api/.../services/investigations.py` (`_orchestrate`), `llm/orchestrator.py` |
 | Interpretation of ambiguous terms | Suggests one of the semantic model's candidates; the suggestion is displayed, never applied. | `interpret.py` |
 | SQL workspace, **Draft SQL** | Drafts SQL from the schema; each draft is validated read-only and dry-run with a small row limit through the repair loop (at most 3 attempts). The response lists every attempt and whether the final draft ran; it is inserted into the editor, never executed automatically. | `apps/api/.../routers/ai.py`, `llm/sql_repair.py` |
-| Investigation summary and reports | Rewords the executive summary of confirmed findings. The wording is kept (`narrative_source: llm_verified`) only when the numeric verifier finds every number in the artifacts; otherwise the deterministic template is used. | `summary.py`, `apps/api/.../services/reports.py` |
+| Investigation summary and reports | Rewords the executive summary of confirmed findings. The wording is kept (`narrative_source: llm_verified`) only when the numeric verifier finds every number in the artifacts, no hypothesis is stated as fact and no related signal is stated as a cause; otherwise the deterministic template is used. The operating review of a plan investigation (`variance_review`) and the brief lead (`brief_lead`) are always deterministic. | `summary.py`, `apps/api/.../services/reports.py` |
 
 ## Providers and models
 
@@ -47,8 +47,12 @@ What the LLM is allowed to do:
 3. Explore with tools in a bounded loop (at most 6 tool steps), only when the workspace enables it.
 4. Word follow-ups and an executive narrative, which are accepted only if a numeric-claims verifier
    finds every number in the executed artifacts at the precision written (and "metric up N%" claims
-   match the measured change), and no untested hypothesis is stated as fact. Otherwise the
-   deterministic text is kept and the rejection is recorded.
+   match the measured change), no untested hypothesis is stated as fact, and no related signal (an
+   observation whose relationship to the change is not established) is stated as a cause: a sentence
+   naming a related signal's metric with causal wording ("because", "drove", "led to") and no
+   disclaimer ("not established", "no evidence") is rejected (`causal_leaks`). Otherwise the
+   deterministic text is kept and the rejection is recorded. The model sees related signals marked
+   `relationship: not_established` and is told to present them only as signals.
 
 ## Tools (spec §52)
 

@@ -101,7 +101,7 @@ class MetricUpdate(BaseModel):
     kind: Literal["simple", "ratio", "derived"] | None = None
     expr: str | None = None
     entity: str | None = None
-    agg: Literal["sum", "count", "count_distinct", "avg", "min", "max"] | None = None
+    agg: Literal["sum", "count", "count_distinct", "avg", "median", "min", "max"] | None = None
     numerator: str | None = None
     denominator: str | None = None
     formula: str | None = None

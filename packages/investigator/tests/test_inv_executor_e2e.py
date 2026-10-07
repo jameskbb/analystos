@@ -279,7 +279,8 @@ def test_budget_variance_by_branch(store: WorkspaceStore, model: SemanticModel) 
     r = execute(p, store, model)
     root = r.tree.root()
     assert root.current == pytest.approx(900_000.0) and root.baseline == pytest.approx(1_050_000.0)
-    assert "below Revenue Budget" in root.statement
+    assert root.statement.startswith("Revenue missed budget by $150.0k (14.3%)")
+    assert "Revenue Budget" in (root.method or "") and root.title == "Revenue missed budget"
     branch = next(n for n in r.tree.nodes if n.kind == "dimension" and n.dimension == "branch_name")
     shares = {
         n.segment.value: n.contribution_to_parent.share

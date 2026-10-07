@@ -117,6 +117,11 @@ def test_breakdown_dimension(model: SemanticModel) -> None:
     assert i.intent == "compare"
 
 
+def test_which_dimension_asks_for_a_breakdown(model: SemanticModel) -> None:
+    i = _i("Which regions had the most revenue in Q2?", model)
+    assert i.breakdown_dimensions == ["region"]
+
+
 def test_budget_comparison_resolves_baseline_metric(model: SemanticModel) -> None:
     i = _i("Revenue vs budget in August", model)
     assert i.comparison_kind == "budget"

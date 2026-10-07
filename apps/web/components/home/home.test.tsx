@@ -77,6 +77,41 @@ describe("Home", () => {
     expect(screen.getByRole("button", { name: "Why did revenue fall in August 2026?" })).toBeInTheDocument();
   });
 
+  it("shows the plan contradiction with an Investigate why that asks the stakeholder question", async () => {
+    const base = {
+      format: "currency",
+      plan_role: "plan",
+      period: "Q2 2026",
+      window_start: "2026-04-01",
+      window_end: "2026-07-01",
+      higher_is_better: true,
+      tolerance: 0.02,
+      sql_actual: "SELECT 1",
+      sql_plan: "SELECT 1",
+    };
+    home.mockResolvedValue({
+      datasets: [{ id: "d1", name: "Orders", table_name: "orders", row_count: 1200, profile_status: "ready", issue_count: 0 }],
+      recent_investigations: [],
+      recent_findings: [],
+      changes: [],
+      plan_note: "Q2 2026 (the latest closed quarter) against plan.",
+      plan_variances: [
+        { ...base, metric_id: "revenue", label: "Revenue", stakeholder_term: "sales", plan_metric_id: "plan_revenue", plan_label: "Plan Revenue", actual: 1003, plan: 1000, variance: 3, variance_pct: 0.003, status: "on_plan" },
+        { ...base, metric_id: "operating_profit", label: "Operating Profit", stakeholder_term: "net profit", plan_metric_id: "plan_operating_profit", plan_label: "Plan Operating Profit", actual: 53, plan: 100, variance: -47, variance_pct: -0.47, status: "unfavorable" },
+      ],
+    });
+    renderHome();
+    const note = await screen.findByRole("note", { name: "Plan contradiction" });
+    expect(note).toHaveTextContent("Revenue finished on plan in Q2 2026 (+0.3%), but Operating Profit missed plan by 47.0%");
+    expect(screen.getByRole("button", { name: /Investigate why/ })).toHaveAttribute(
+      "title",
+      "We made our sales number last quarter, but we missed our target for net profit. What happened?",
+    );
+    const tiles = screen.getAllByTestId("plan-tile");
+    expect(tiles.map((t) => t.getAttribute("data-status"))).toEqual(["on_plan", "unfavorable"]);
+    expect(screen.getByText("Against plan · Q2 2026")).toBeInTheDocument();
+  });
+
   it("surfaces an error state when the summary fails", async () => {
     home.mockRejectedValue(new Error("boom"));
     renderHome();

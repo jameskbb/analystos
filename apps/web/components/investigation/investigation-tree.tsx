@@ -4,7 +4,9 @@ import { ChevronRight, CircleAlert, Lightbulb } from "lucide-react";
 import { normalizeStatementType } from "@/components/analysis/statement";
 import { EVIDENCE_META, normalizeEvidence } from "@/components/analysis/evidence";
 import { ChangeValue, ShareBar } from "@/components/analysis/change";
+import { formatSignedChange } from "@/lib/format";
 import { ancestors, premiseVerdict, visibleNodes, type NormNode, type NormTree } from "./model";
+import { isOtherLines } from "./answer";
 import { cn } from "@/lib/utils";
 
 const TYPE_MARK: Record<string, { cls: string; label: string }> = {
@@ -54,7 +56,12 @@ function TreeRow({
   onToggle,
   onSelect,
   rowRef,
+  root,
+  overlapping,
 }: {
+  root: NormNode | null;
+  /** The root has a reconciled explanation, so dimension breakdowns under it are overlapping views. */
+  overlapping: boolean;
   node: NormNode;
   depth: number;
   expanded: boolean;
@@ -65,6 +72,7 @@ function TreeRow({
   rowRef: (el: HTMLDivElement | null) => void;
 }) {
   const t = normalizeStatementType(node.statement_type);
+  const compact = isOtherLines(node);
   const rejected = node.status === "rejected";
   const failed = node.status === "failed" || node.kind === "failed";
   const hasKids = node.children.length > 0;
@@ -79,6 +87,7 @@ function TreeRow({
       tabIndex={focused ? 0 : -1}
       data-node-id={node.id}
       data-status={node.status}
+      data-compact={compact ? "true" : undefined}
       onClick={onSelect}
       className={cn(
         "group relative flex cursor-default items-start gap-1 rounded-sm py-1 pr-2 outline-none",
@@ -113,12 +122,24 @@ function TreeRow({
             t === "hypothesis" && "text-fg-muted italic",
             rejected && "line-through decoration-fg-faint",
             depth === 0 && "font-medium",
+            compact && "text-fg-muted",
           )}
         >
-          {node.statement}
+          {node.title ?? node.statement}
         </div>
+        {node.title && !compact ? <div className="mt-0.5 line-clamp-2 text-2xs leading-4 text-fg-muted">{node.statement}</div> : null}
+        {compact && node.members?.length ? (
+          <div className="mt-0.5 truncate text-2xs text-fg-subtle" title={node.statement} data-testid="other-lines-members">
+            {node.members.map((m) => m.label).join(", ")}
+          </div>
+        ) : null}
         <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-2xs text-fg-subtle">
-          {node.pct_change !== null && node.pct_change !== undefined ? (
+          {depth > 0 && root && node.root_effect !== null && node.root_effect !== undefined ? (
+            <span className={cn("font-medium tabular", node.root_effect < 0 ? "text-negative" : "text-positive")} title={`Effect on ${root.metric_label ?? "the root metric"}`}>
+              {formatSignedChange(node.root_effect, root.format)} on {root.metric_label ?? "root"}
+            </span>
+          ) : null}
+          {node.root_effect !== null && node.root_effect !== undefined && depth > 0 ? null : node.pct_change !== null && node.pct_change !== undefined ? (
             <ChangeValue pct={node.pct_change} abs={node.abs_change} format={node.format} className="text-2xs" showIcon={false} />
           ) : node.abs_change !== null && node.abs_change !== undefined ? (
             <ChangeValue abs={node.abs_change} format={node.format} className="text-2xs" showIcon={false} />
@@ -128,6 +149,16 @@ function TreeRow({
           {rejected ? <span className="text-negative">rejected</span> : null}
           {node.status === "confirmed" ? <span className="text-positive">confirmed</span> : null}
           {node.status === "needs_review" ? <span className="text-warning">needs review</span> : null}
+          {node.kind === "dimension" && depth === 1 && overlapping ? (
+            <span className="text-fg-subtle" title="Another view of the same gap; it overlaps the reconciled parts and is not added to them">
+              overlapping view
+            </span>
+          ) : null}
+          {node.reconciliation ? (
+            <span className={node.reconciliation.reconciled ? "font-medium text-positive" : "font-medium text-warning"}>
+              {node.reconciliation.reconciled ? "reconciles" : "does not reconcile"}
+            </span>
+          ) : null}
           {failed ? (
             <span className="inline-flex items-center gap-0.5 text-negative">
               <CircleAlert className="size-3" /> failed
@@ -249,6 +280,8 @@ export function InvestigationTreeView({
   };
 
   if (!tree.rootId) return null;
+  const root = tree.nodes.get(tree.rootId) ?? null;
+  const hasRecon = [...tree.nodes.values()].some((n) => !!n.reconciliation);
   return (
     <div role="tree" aria-label="Investigation tree" onKeyDown={onKeyDown} className={cn("flex flex-col py-1", className)}>
       {rows.map((r) => {
@@ -256,6 +289,8 @@ export function InvestigationTreeView({
         return (
           <TreeRow
             key={r.id}
+            root={root}
+            overlapping={hasRecon}
             node={n}
             depth={r.depth}
             expanded={expanded.has(r.id)}

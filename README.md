@@ -1,12 +1,13 @@
 # AnalystOS
 
-![AnalystOS title card: the product name and one-line description beside an investigation tree for 'Why was August revenue down?', with Revenue declined 11.8% at the root and the Orders, AOV and Dallas nodes that explain it](docs/images/readme-title-analystos.png)
+![AnalystOS title card: the product name beside the question "We made our sales number last quarter, but we missed our target for net profit. What happened?", with Revenue on plan (+0.4%) and a waterfall labelled "net profit, read as Operating Profit" from the $3.79M plan through unit-cost inflation, discounting, favorable mix, freight, labor and other lines to the $1.93M actual, the largest bars labelled with their cause (supplier Gulf States, Contractor discounts, fuel surcharge, overtime), and the Gulf Coast lead-conversion signal marked not established](docs/images/readme-title-analystos.png)
 
 **An analytical investigation workspace for BI, data, operations and finance teams.**
-You connect your data, define what your metrics mean, and ask questions like *"Why did revenue
-fall?"* AnalystOS turns the question into a reviewable investigation plan, runs it as real SQL
-against your data, decomposes the change with exact arithmetic, and returns a tree of findings
-where every number links back to the query that produced it.
+You connect your data, define what your metrics mean, and ask questions like *"We made our sales
+number last quarter, but we missed our target for net profit. What happened?"* AnalystOS turns the question into a reviewable
+investigation plan, runs it as real SQL against your data, decomposes the change with exact
+arithmetic, and returns a tree of findings where every number links back to the query that
+produced it.
 
 The idea in one line: **make the analyst's method executable.**
 
@@ -17,14 +18,42 @@ end to end with no AI API key; see [Quick start](#quick-start).
 > security-audited. Run it locally; see [SECURITY.md](SECURITY.md) before exposing it to a network
 > or pointing it at sensitive data.
 
-## The problem
+## The question
 
-Traditional BI is good at showing *what* happened. Answering *why* is still manual work, and
-most of that work is not insight. It is mechanics:
+The demo company is Summit Supply Co., a building-materials distributor with two years of generated
+orders, costs, leads and an FY26 operating plan. Its CEO sends the analyst one line:
+
+> **We made our sales number last quarter, but we missed our target for net profit. What happened?**
+
+Behind that line are the questions a CEO actually has: how far profit missed, what explains it,
+which parts of the business, what changed operationally, what is proven and what is only
+suspicious, and what leadership should watch next.
+
+## Why a dashboard does not answer it
+
+Here is Q2 2026 against the FY26 Operating Plan: five of the six tiles on the AnalystOS home page,
+rounded (each value is an executed query over the demo data):
+
+| Metric | Actual | Plan | Variance | Status |
+|---|---:|---:|---:|---|
+| Revenue | $33.89M | $33.75M | +$136K (+0.4%) | on plan |
+| Operating Profit | $1.93M | $3.79M | −$1.86M (−49.0%) | below plan |
+| Gross Margin | $7.43M | $8.76M | −$1.32M (−15.1%) | below plan |
+| Operating Expenses | $5.50M | $4.96M | +$534K (+10.8%) | over plan |
+| Freight Cost | $1.29M | $956K | +$336K (+35.2%) | over plan |
+
+Every tile is correct, and together they raise the question rather than answer it. Nothing on the
+screen says how much of the $1.86M miss each red tile accounts for, whether the tiles overlap,
+whether they add back to the miss, which categories, customers or regions carry it, or whether
+"we made our sales number" is even true.
+
+![Home after loading the demo: Q2 2026 against plan with Revenue on plan and Operating Profit, Gross Margin, Operating Expenses, COGS and Freight off plan, an Investigate why button, then what changed last month and a needs-attention rail](docs/images/home.png)
+
+Someone still has to investigate, and most of that work is not insight. It is mechanics:
 
 - deciding which **governed** metric the question actually refers to: one approved, versioned
-  definition rather than an ad-hoc formula ("margin": which of the four?);
-- establishing the right comparison period and checking the baseline is a fair one;
+  definition rather than an ad-hoc formula ("profit", "margin": which one?);
+- establishing the right comparison (a period, or the plan) and checking the baseline is a fair one;
 - writing several queries, and getting the joins and the grain right so nothing is double counted;
 - testing each dimension that could plausibly break the metric down;
 - computing each segment's contribution and confirming the parts reconcile to the whole;
@@ -35,9 +64,146 @@ That sequence is repeatable. AnalystOS encodes it in software. The analyst still
 question matters, whether the model is right, and what to do about the answer, but spends less
 of the day assembling the evidence and more of it interpreting the business.
 
-## One investigation, end to end
+## What AnalystOS finds
 
-The demo dataset is a building-materials distributor with two years of orders. Ask:
+The analyst types the CEO's sentence as written (or clicks **Investigate why** next to the home
+page's plan comparison, which asks it). AnalystOS reads it before running anything:
+
+- *net profit* is not the name of any metric. The glossary defines **Net Profit** for this company
+  as Operating Profit (interest and tax are held at corporate and are not in the data), so the words
+  resolve to the governed **Operating Profit** metric, and the plan review shows that resolution
+  with the glossary definition beside it;
+- *missed our target* means actual against Operating Profit's own governed plan metric,
+  **Operating Profit Plan**, for Q2 2026 ("last quarter" from the workspace's reference date);
+- *we made our sales number* is a **premise**: something the question takes for granted, which will
+  be measured rather than accepted. *Sales* is a governed synonym of Revenue and *number* means its
+  target, so the check is Revenue against Revenue Target, at most 1% short;
+- the plan it proposes (compare, verify the premise, decompose the gap through the metric tree,
+  split gross margin into unit cost, discounting and mix, locate each material variance, check the
+  parts add back, look for related signals) is about 92 queries, so it waits for review.
+
+![The plan for the CEO question: "sales" and "net profit" resolved through the glossary with the definitions behind them, the two statements it takes as premises, and the reviewable steps](docs/images/ceo-plan.png)
+
+Run it, and the answer opens with the artifact a CFO actually uses: a bridge from plan to actual,
+where every bar is a node of the reconciled explanation and every amount comes from an executed
+query.
+
+```
+Operating Profit, plan                     $3.79M
+  Unit-cost inflation                    -$885.7k    Gross Margin
+  Increased discounting                  -$622.4k    Gross Margin
+  Favorable volume and mix               +$184.4k    Gross Margin
+  Freight Cost overrun                   -$336.2k    Operating Expenses
+  Labor Cost overrun                     -$196.3k    Operating Expenses
+  Other lines, net                         -$1,503   Operating Expenses
+Operating Profit, actual                   $1.93M    gap -$1.86M (-49.0%), residual $0.00
+```
+
+![The CEO investigation: the plan-to-actual bridge above the tree, the premise and reconciliation beside it, and the tree opened along the path to each cause, with the Gulf States Forest Products supplier node selected and its evidence and methodology on the right](docs/images/ceo-investigation.png)
+
+Below the bridge, the tree is already open along the path from each bar to its operational cause,
+so the first screen tells the whole story without a click. Amounts are effects on Operating Profit.
+The rendering below is abridged to the material path under each bar: the omitted sibling segments
+carry the remainder, so children shown here need not sum to their parent (the full tree does):
+
+```
+Operating Profit missed plan: $1.93M against a plan of $3.79M, -$1.86M (-49.0%)
++-- Gross Margin shortfall                                         -$1.32M   71% of the miss
+|   +-- Unit-cost inflation                                        -$885.7k
+|   |   +-- Lumber (costs 7.4% above plan)                         -$555.0k
+|   |   |   +-- Supplier Gulf States Forest Products (+12.1%)     -$468.4k   84% of Lumber
+|   |   +-- Roofing (costs 6.7% above plan; suppliers rose alike)  -$296.5k
+|   +-- Increased discounting                                      -$622.4k
+|   |   +-- Contractor (discount 10.0% against 6.9% at plan rates) -$629.5k
+|   |       +-- Gulf Coast (15.0% against 7.0%)                    -$304.0k
+|   +-- Favorable volume and mix                                   +$184.4k
++-- Operating Expenses overrun                                     -$534.0k  29% of the miss
+|   +-- Freight Cost overrun (+35.2%)                              -$336.2k
+|   |   +-- Fuel surcharge ($369.3k against $36.8k)                -$332.5k  99% of freight
+|   |   +-- Base freight: on plan
+|   +-- Labor Cost overrun                                         -$196.3k
+|   |   +-- Overtime overrun                                       -$284.5k
+|   |   |   +-- Austin -$141.2k, partly offset by a payroll saving of $36.8k in Austin
+|   |   |   +-- San Antonio -$135.3k, partly offset by a payroll saving of $26.5k there
+|   |   +-- Payroll saving                                         +$88.2k
+|   +-- Other lines, net (commission, occupancy, other)              -$1,503
++-- Premise supported: Revenue $33.89M against Revenue Target $33.75M (+0.4%)
++-- Reconciled at every level (5 identities; largest residual $0.00)
+
+Related signal (relationship to the Operating Profit miss: not established)
+    Gulf Coast, Paid Search: lead conversion 30.0% -> 5.5%, median first response 4.2 h -> 70.7 h
+    (Q2 2026 vs Q1 2026)
+```
+
+The investigation's short answer, verbatim:
+
+> Operating Profit missed plan by $1.86M (-49.0%) in Q2 2026, while Revenue met Revenue Target.
+> Gross Margin explains $1.32M of the gap and Operating Expenses $534.0k. The largest causes:
+> unit-cost inflation (Lumber and Roofing; supplier Gulf States Forest Products), increased
+> discounting (Contractor, Gulf Coast) and freight cost overrun (fuel surcharge).
+
+Four things in that answer matter most, and are easy to miss:
+
+- **Every material branch ends in a measured operational cause.** Not "costs rose", but one
+  lumber supplier's price increase, Contractor discounts in Gulf Coast, carrier fuel surcharges,
+  and overtime in Austin and San Antonio, partly offset by payroll that came in under plan in the
+  same two branches. Below the plan's own grain (the plan has no supplier), each supplier is
+  costed at its own prior-year rate scaled by the plan's change for its cell, so a supplier that
+  is always dearer is not booked as a cost increase, and the parts still add up exactly to Lumber.
+- **It adds up.** The bars sum to the gap, and every level of the tree reconciles to its parent;
+  the reconciliation node lists each identity and its residual. Three immaterial lines are one
+  "Other lines, net" node rather than three rows beside the real story. A breakdown that overlaps
+  the explanation (the same gap by region) is collapsed and labelled *overlapping view*, never added
+  to it.
+- **The premise was checked.** "We made our sales number" is true here (+0.4%), and the card says
+  so with the numbers. Had revenue been 3% short, it would say *contradicted*.
+- **A coincidence is not promoted to a cause.** In Gulf Coast, where the Contractor discounting
+  concentrates, Paid Search lead conversion collapsed in the same quarter. That is a verified
+  operating signal, and it is shown apart from the tree with the words "Relationship to the
+  Operating Profit miss: not established". The data cannot say whether slow lead follow-up and
+  deeper discounts are connected, so AnalystOS does not say it.
+
+![The related signal, listed apart from the explanation tree, with the relationship stated as not established and the SQL that measured it](docs/images/ceo-signal.png)
+
+The analyst confirms the parts they accept through the existing review workflow; the report built
+from the investigation then opens with an **operating review** written only from confirmed nodes,
+laid out as a one-page memo: headline, premise, the bridge, what explains it (each bullet ending in
+its operational cause), related signals stated as not established, and what to watch. It says
+"reconciles exactly" only when every part of the gap is confirmed, and until then it shows what is
+not yet confirmed. A re-run on the same data reproduces every node (the diff is empty), and
+confirmed decisions carry forward. The quarterly business review for Q2 2026 shows each KPI
+against plan and includes the same review.
+
+![The operating review memo: headline and premise, the plan-to-actual bridge as a chart and a table, and what explains the miss](docs/images/ceo-review.png)
+
+## Why you can trust it, in short
+
+- Every number is read off an executed, read-only query over governed metric definitions; open any
+  node for its SQL, result, validation checks, metric versions and lineage.
+- The decomposition is exact by construction: additive identities through the metric tree against
+  each part's own plan, and counterfactual bridges whose effects sum to the parent.
+- Reconciliation is checked, not assumed, and a part that does not reconcile is flagged.
+- Evidence strength and statement type (observation, supported explanation, hypothesis) come from
+  published rules, and hypotheses are never stated as facts.
+- No language model is involved: this whole investigation runs with no API key.
+
+The long version is [below](#why-you-can-trust-the-answer).
+
+## How this differs from asking an AI to query the data
+
+Ask a general-purpose AI assistant the CEO's question over the same tables and a typical answer is
+a paragraph like "costs increased and discounts rose, while revenue held steady". That is not wrong,
+but nothing in it can be checked: which costs, by how much, against what, whether it accounts for
+the whole miss, and whether the numbers came from the data or from the model's wording.
+
+AnalystOS answers with the bridge and the short answer above, and each bar and clause is a node
+you can open:
+the query that measured it, the plan it was compared with, the calculation that split it, the
+checks it passed, and whether it belongs to the reconciled explanation or is only a related signal.
+
+## A smaller example: why was August revenue down?
+
+The same dataset also carries a simpler story. Ask:
 
 > **Why was August revenue down?**
 
@@ -52,12 +218,12 @@ parent's change) and how strong the evidence behind it is (*strong*, *moderate*,
 *hypothesis*); *AOV* is average order value.
 
 ```
-Revenue declined 11.8% ($11.37M to $10.02M): August 2026 vs July 2026   observation, strong
-+-- Orders declined 6.7% (5,919 to 5,522): explains 55% of the change     supported explanation
-+-- AOV declined 5.5% ($1,920 to $1,815): explains 45% of the change      supported explanation
-+-- Branch = Dallas: Revenue -$662.0k (-26.7%), 49% of the change
-|   +-- Customer = Trinity Ridge Construction: 53% of the Dallas change
-+-- Product Tier = Entry: Revenue +$362.2k (+15.2%), offsets 27% of the change
+Revenue declined 11.8% ($11.40M to $10.05M): August 2026 vs July 2026   observation, strong
++-- Orders declined 6.7% (5,918 to 5,524): explains 55% of the change     supported explanation
++-- AOV declined 5.5% ($1,926 to $1,819): explains 45% of the change      supported explanation
++-- Branch = Dallas: Revenue -$665.0k (-26.6%), 49% of the change
+|   +-- Customer = Trinity Ridge Construction: 52% of the Dallas change
++-- Product Tier = Entry: Revenue +$364.7k (+15.3%), offsets 27% of the change
 ```
 
 Every number traces back along one chain: **Conclusion -> Evidence -> Calculation -> Query ->
@@ -71,7 +237,7 @@ changed, because a metric definition changed, or not at all.
 
 ![The investigation workstation: the tree, the Dallas node with its evidence and validation checklist, and the calculation behind it](docs/images/investigation.png)
 
-## How is this different from asking an AI model?
+## How the pipeline differs from typical AI analytics
 
 Most "chat with your data" tools have the same shape. A language model decides what to query,
 writes the SQL, reads the rows back, and writes the answer. The model is in the middle of every
@@ -91,8 +257,6 @@ The whole middle of that second line runs without a language model. AnalystOS ru
 with no API key configured, and the analytical eval suite runs that way in CI; the results are
 [below](#analytical-correctness-and-testing). An optional model can help read the question and
 word the answer, inside bounds described further down; it is never allowed to produce a number.
-
-![The plan AnalystOS proposes before anything runs: how it read the question, and the editable steps](docs/images/plan.png)
 
 ### What "deterministic" means here, and what it does not
 
@@ -117,6 +281,15 @@ terms, dimension values and a large vocabulary of time expressions. A question o
 vocabulary comes back as ambiguous, or as a planning error that says what it could not resolve;
 it is not guessed at. You always know whether the system understood you.
 
+How often it understands is measured, not claimed. A corpus of 175 questions written blind to the
+interpreter, the way a CEO, CFO, operations leader, sales leader or analyst would type them
+(`tests/evals/phrasings.yaml`), scores every field a human would be sure of: the metric, the
+comparison, the periods, premises, filters and breakdowns, and whether it asks when it should ask or
+says "not governed" when it should. The interpreter reads **96.6% of the 118 tuning questions** and
+**68.4% of the 57 held-out questions** it was never tuned on. The gap is the honest number: phrasings
+unlike anything it has seen still fail, and when they fail it usually asks or reports what it could
+not resolve rather than answering a different question.
+
 ## Why you can trust the answer
 
 Trust here is mechanical, not rhetorical. Six things hold it up.
@@ -133,7 +306,8 @@ Every governed measurement is SQL. A plan can also carry a sandboxed Python step
 stores the code and its output in place of a query, held to the same rule, that a value exists
 only because something executed and was recorded.
 
-![The compiled SQL behind the Dallas node](docs/images/investigation-sql.png)
+The related-signal screenshot above shows the compiled SQL behind one node, in the inspector's
+**SQL** tab.
 
 **2. The joins are grain-safe by construction.** The compiler only uses relationships you have
 approved, and it refuses, with an explanation, to group a metric by a dimension reached through
@@ -241,20 +415,18 @@ The demo's second story shows the part of the analyst's method that tools usuall
 > **Revenue was roughly flat. Why did margin decline?**
 
 "Margin" is ambiguous. The semantic model defines Gross Margin, Gross Margin %, Contribution
-Margin and Operating Margin, and the glossary lists all four, so AnalystOS asks rather than
+Margin and Operating Profit, and the glossary lists all four, so AnalystOS asks rather than
 picking one. Then it treats *"revenue was roughly flat"* as a **premise to be checked, not a fact
 to be accepted**: it evaluates ten candidate period pairs against the data, strikes out the ones
 where revenue was not flat (including August vs July, where revenue fell 11.8%), and selects
 **Q2 2026 vs Q2 2025**, where revenue moved +0.3%.
 
-![The margin question: the disambiguation, the premise check, and ten candidate periods scored](docs/images/margin-plan.png)
+The result splits the 4.4 pp Gross Margin % decline into an exact counterfactual bridge: unit-cost
+inflation −4.0 pp (Q2 2026 lines priced at the same product's cost twelve months earlier),
+discounting −1.4 pp (Q2 2026 lines at Q2 2025 segment discount rates), with residual mix and other
+effects +1.0 pp.
 
-The result splits the 4.77 pp Gross Margin % decline into an exact counterfactual bridge: unit-cost
-inflation −4.21 pp (Q2 2026 lines priced at the same product's cost twelve months earlier),
-discounting −1.61 pp (Q2 2026 lines at Q2 2025 segment discount rates), with residual mix and other
-effects +1.05 pp.
-
-![Gross Margin % decomposed into unit cost and discounting, with the waterfall bridge and the SQL](docs/images/margin-investigation.png)
+![Gross Margin % decomposed into unit cost and discounting: the premise check above the tree, the waterfall bridge and the SQL](docs/images/margin-investigation.png)
 
 ## Why the semantic model matters, and the risk it carries
 
@@ -317,7 +489,7 @@ work. Detail: [docs/semantic-layer.md](docs/semantic-layer.md)
 * **Work directly.** SQL editor with schema autocomplete, a no-code Explorer and pivot, and
   notebooks (SQL, sandboxed Python, Markdown, charts, findings).
 * **Share.** Findings with a review workflow and lineage; dashboards bound to semantic metrics
-  with KPI-to-source lineage; reports and a monthly business review that must be reviewed block by
+  with KPI-to-source lineage; reports and a monthly or quarterly business review (KPIs against plan where a plan exists) that must be reviewed block by
   block before publishing; exports (CSV, Excel, Markdown, HTML, PDF with chart images, notebook).
 * **Collaborate securely.** Password accounts, workspace roles and single-use invite links, plus a
   no-password single-user mode for a personal machine that refuses requests from other machines
@@ -325,11 +497,7 @@ work. Detail: [docs/semantic-layer.md](docs/semantic-layer.md)
 * **Automate.** A typed REST API with OpenAPI docs ([apps/api/API.md](apps/api/API.md)) and an MCP
   server for external agents ([docs/mcp.md](docs/mcp.md)).
 
-![Home after loading the demo: what changed, with an investigate link per KPI, and a needs-attention rail](docs/images/home.png)
-
-![The Data page: 18 datasets, profiles, and which quality rules are failing](docs/images/data.png)
-
-![A weekly revenue forecast with prediction intervals and model backtests](docs/images/analyze-forecast.png)
+![The Data page: 21 datasets, profiles, and which quality rules are failing](docs/images/data.png)
 
 Screenshots are regenerated with `node tests/e2e/scripts/screenshots.mjs <web url>` against a
 freshly started stack. The title card at the top is rendered from `docs/src/title-card.html` with
@@ -367,7 +535,7 @@ here rather than explained again.
     numeric verifier and the hypothesis-leak check. Re-run the stored plan on demand and diff node
     by node, including dataset and metric-version changes.
 
-The fourth assist point sits outside the ten: when a workspace owner enables the exploratory tool
+Three assist points are marked above; a fourth sits outside the ten: when a workspace owner enables the exploratory tool
 loop, it runs on the finished tree, after step 9. See
 [Where the optional AI is allowed to act](#where-the-optional-ai-is-allowed-to-act).
 
@@ -426,7 +594,7 @@ machines needs a TLS reverse proxy; see the deployment model in
 
 ## Demo walkthrough
 
-The Summit Supply Co. dataset is a Texas and Oklahoma building-materials distributor: 18 tables,
+The Summit Supply Co. dataset is a Texas and Oklahoma building-materials distributor: 21 tables,
 two years of orders, deliberately messy files and five planted stories
 ([docs/demo-scenarios.md](docs/demo-scenarios.md)).
 
@@ -437,24 +605,32 @@ two years of orders, deliberately messy files and five planted stories
 3. **Relationships.** Review the suggested joins and their confidence. `returns.order_id` only
    matches after trimming whitespace, so that join is left unapproved, and therefore unused.
 4. **Metrics.** Revenue excludes cancelled orders by definition; Gross Margin, Gross Margin %,
-   Contribution Margin and Operating Margin all exist; open the revenue tree (Orders × AOV;
+   Contribution Margin and Operating Profit all exist; open the revenue tree (Orders × AOV;
    Orders = Customers × Frequency; AOV = Units per Order × ASP).
-5. **Investigate "Why was August revenue down?"** This is the walkthrough that carries the argument.
+5. **Ask the CEO's question.** On Home, the *Against plan* panel shows Q2 2026 with Revenue on plan
+   and Operating Profit $1.86M below it; click **Investigate why**. Review the plan (the premise
+   check, the reconcile and related-signals steps) and run it. Read the plan-to-actual bridge and
+   the tree beneath it, already open down to the supplier, the fuel surcharge and the two branches;
+   click a bar to open its node and the **Calculation** tab, then the Gulf Coast related signal
+   under the tree. Confirm the parts you accept (node menu, **Confirm**), type
+   *build me a report* for the operating review, and **Re-run** to see an empty diff. Reports →
+   Business review → Quarter → Q2 2026 shows every KPI against plan with the same review.
+6. **Investigate "Why was August revenue down?"** The smaller example.
    Review the plan, run it, read the tree. Click "Branch = Dallas" for its chart, filter chips and
    evidence, then the **Calculation** and **SQL** tabs in the inspector. **Re-run** reproduces
    every node and the diff is empty. **Branch / drill** by Customer to find Trinity Ridge
    Construction, then **Save as finding**.
-6. **Report it.** Type *build me a report* in the command bar, or open Reports → Business review
+7. **Report it.** Type *build me a report* in the command bar, or open Reports → Business review
    for August 2026. Mark each block reviewed (or exclude it) and publish; export HTML or PDF with
    the charts.
-7. **Ask the hard one: "Revenue was roughly flat. Why did margin decline?"** AnalystOS asks
+8. **Ask the hard one: "Revenue was roughly flat. Why did margin decline?"** AnalystOS asks
    which margin you mean, checks the premise against the data, picks Q2 2026 vs Q2 2025 (August vs
-   July is rejected because revenue fell 11.8% there), and splits the 4.77 pp decline into unit cost
-   (−4.21 pp, mostly Lumber and Roofing) and discounting (−1.61 pp).
-8. **Analyze.** Forecast revenue with backtests, scan daily revenue for anomalies and investigate
+   July is rejected because revenue fell 11.8% there), and splits the 4.4 pp decline into unit cost
+   (−4.0 pp, mostly Lumber and Roofing) and discounting (−1.4 pp).
+9. **Analyze.** Forecast revenue with backtests, scan daily revenue for anomalies and investigate
    one, or segment customers.
-9. **Try the other stories.** "Why did conversion rate decline in Q2 2026?", "Why did inventory
-   value increase in June 2026 compared with June 2025?", "Why was Q2 2026 revenue below forecast?"
+10. **Try the other stories.** "Why did conversion rate decline in Q2 2026?", "Why did inventory
+   value increase in June 2026 compared with June 2025?"
 
 ## Analytical correctness and testing
 
@@ -462,34 +638,37 @@ two years of orders, deliberately messy files and five planted stories
 make test        # all Python suites (one process per suite) + web unit tests
 make evals       # analytical evals with the scorecard printed
 make setup-e2e   # once: Playwright + Chromium
-make e2e         # acceptance flows 1 and 2 in a browser (boots API + web on ports 18765 / 13765)
+make e2e         # acceptance flows 1 and 2 and the flagship CEO flow in a browser (ports 18765 / 13765)
 ```
 
-`make evals` completes in about 70 seconds with **no network, no Docker and no API key** and
+`make evals` completes in about 90 seconds with **no network, no Docker and no API key** and
 prints a per-question scorecard. The current result:
 
 ```
-Evidence surfaced: 67/67 (100%); required: 67/67; questions passing: 16/16
+Evidence surfaced: 104/104 (100%); required: 104/104; questions passing: 17/17
 ```
 
-Those are two different units: **67 evidence expectations across 16 benchmark questions**. Every
+Those are two different units: **104 evidence expectations across 17 benchmark questions**. Every
 expectation is required; none is marked optional. The suite has three parts:
 
-- **Compiler output versus hand-written ground-truth SQL**: 17 parametrised comparisons that
+- **Compiler output versus hand-written ground-truth SQL**: 18 parametrised comparisons that
   execute the compiler's SQL and an independently hand-written query over the raw files in a
   separate DuckDB connection and require the same answer, plus standalone guards that every metric
   compiles, that a grain violation is refused, that an unapproved relationship is never used, and
   that mutating SQL never reaches the store. This is the strongest part of the suite: the semantic
   layer checked against an independent expression of the same question.
-- **Benchmark questions against the demo's answer key**: 16 questions covering headline values,
-  top drivers, segments, period selection, premise verdicts and ambiguity handling, plus three
-  kinds of negative check that matter as much as the positive ones: no share is claimed over
-  overlapping segments (`no_overlap_shares`), every evidence node reaches executed SQL through its
-  lineage (`traceable`), and a circular identity is never offered as a driver (`no_driver`: Gross
-  Margin is not "explained" by Gross Margin). Also asserted: re-running an investigation reproduces
-  it exactly.
-- **Acceptance flows 1 and 2 through the REST API**: four tests driven in-process, one of them
-  asserting that a re-run keeps the analyst's confirm and reject decisions.
+- **Benchmark questions against the demo's answer key**: 17 questions covering headline values,
+  top drivers, segments, period selection, premise verdicts, ambiguity handling and the flagship
+  plan variance (revenue and profit against plan, the premise, the bridge steps, the unit-cost,
+  discount and mix split, the supplier drill, the fuel-surcharge split, the same-branch labor offset,
+  other-lines grouping, reconciliation), plus five kinds of negative check that matter as much as
+  the positive ones: no share is claimed over overlapping segments (`no_overlap_shares`), every
+  evidence node reaches executed SQL through its lineage (`traceable`), a circular identity is never
+  offered as a driver (`no_driver`: Gross Margin is not "explained" by Gross Margin), a related
+  signal is never worded as a cause (`no_causal_claim`), and the brief and review carry no method
+  jargon (`no_jargon`). Also asserted: re-running an investigation reproduces it exactly.
+- **Acceptance flows through the REST API**: five tests driven in-process (flows 1 and 2, the
+  flagship plan investigation, and a re-run that keeps the analyst's confirm and reject decisions).
 
 **What this does and does not prove.** The answer key is computed, not hand-typed: a module
 re-measures the planted stories from the generated files with DuckDB. But that module is a sibling
@@ -507,8 +686,10 @@ The wider suite:
   in its own pytest process. No network, Docker or API key.
 - **Web** (`apps/web`): Vitest component and logic tests (two workers by default; set
   `VITEST_MAX_WORKERS` for more).
-- **E2E** (`tests/e2e`): Playwright drives flow 1 (including a re-run with an empty diff) and flow
-  2 (the margin question) end to end with real, actionability-checked clicks.
+- **E2E** (`tests/e2e`): Playwright drives flow 1 (including a re-run with an empty diff), flow 2
+  (the margin question) and the flagship CEO flow (home plan comparison, premise, reconciliation,
+  related signal, confirmations, re-run, report and quarterly business review) end to end with
+  real, actionability-checked clicks; the flagship flow asserts against the answer key, not typed numbers.
 - **CI** ([.github/workflows/ci.yml](.github/workflows/ci.yml)): ruff lint and format check, mypy
   over all five Python packages (configured in `pyproject.toml` under `[tool.mypy]`), every Python
   suite including the evals, Alembic upgrade/downgrade/check on SQLite and Postgres plus an API boot against Postgres, web lint,
@@ -525,7 +706,7 @@ Full detail: [docs/analytical-correctness.md](docs/analytical-correctness.md)
 * **A wrong semantic model gives a reproducibly wrong answer, with full lineage.** The arithmetic,
   the grain and the traceability are guaranteed; the business definition is not. See *Why the
   semantic model matters* for the mitigations, and [docs/semantic-layer.md](docs/semantic-layer.md).
-* **The analytical evals cover only the demo's planted stories** (67/67 expectations across 16
+* **The analytical evals cover only the demo's planted stories** (104/104 expectations across 17
   questions); on your data, investigation quality tracks your semantic model's metric trees and
   dimensions. See *What this does and does not prove* above.
 * **AI is optional and Anthropic-only today.** It never produces numbers, and its wording is

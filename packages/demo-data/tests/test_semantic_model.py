@@ -17,13 +17,21 @@ REQUIRED_METRICS = {
     "gross_margin",
     "gross_margin_pct",
     "contribution_margin",
-    "operating_margin",
+    "operating_profit",
+    "operating_expenses",
+    "freight_cost",
+    "sales_commission",
+    "payroll",
+    "overtime",
+    "occupancy",
+    "other_opex",
     "conversion_rate",
+    "median_first_response_hours",
     "leads",
     "inventory_value",
     "days_of_supply",
-    "forecast_revenue",
     "budget_revenue",
+    "revenue_target",
     "return_rate",
 }
 
@@ -71,9 +79,64 @@ def test_margin_is_deliberately_ambiguous():
         "gross_margin",
         "gross_margin_pct",
         "contribution_margin",
-        "operating_margin",
+        "operating_profit",
     }
     assert model.find_metrics("margin") == [], "no metric may silently claim the bare word 'margin'"
+
+
+def test_operating_profit_tree_has_a_plan_metric_for_every_node():
+    model = semantic_model()
+    tree = model.get_tree("operating_profit")
+    edges = {(e.parent, e.child, e.relation) for e in tree.nodes}
+    lines = ["freight_cost", "labor_cost", "sales_commission", "occupancy", "other_opex"]
+    assert edges == {
+        ("operating_profit", "gross_margin", "additive"),
+        ("operating_profit", "operating_expenses", "subtractive"),
+        ("gross_margin", "revenue", "additive"),
+        ("gross_margin", "cogs", "subtractive"),
+        *{("operating_expenses", line, "additive") for line in lines},
+        ("freight_cost", "base_freight", "additive"),
+        ("freight_cost", "fuel_surcharge", "additive"),
+        ("labor_cost", "payroll", "additive"),
+        ("labor_cost", "overtime", "additive"),
+    }
+    assert model.get_metric("labor_cost").formula.replace(" ", "") == "payroll+overtime"
+    assert (
+        model.get_metric("plan_freight_cost").formula.replace(" ", "")
+        == "plan_base_freight+plan_fuel_surcharge"
+    )
+    headcount = model.get_metric("headcount")
+    assert headcount.time_aggregation == "avg" and model.get_metric("plan_headcount").plan_for == "headcount"
+    opex = model.get_metric("operating_expenses")
+    assert opex.kind == "derived" and set(opex.formula.replace(" ", "").split("+")) == set(lines)
+    plans = {m.plan_for: m for m in model.metrics if m.plan_for and "plan" in m.tags}
+    for node in tree.metric_ids():
+        assert node in plans, f"no plan metric for {node}"
+        assert plans[node].id == f"plan_{node}"
+    # Budgets and targets are allocations of the same plan with their own roles, never tagged plan.
+    for mid, role in (
+        ("budget_revenue", "budget"),
+        ("budget_gross_margin", "budget"),
+        ("revenue_target", "target"),
+    ):
+        m = model.get_metric(mid)
+        assert role in m.tags and "plan" not in m.tags and m.plan_for is not None
+
+
+def test_category_is_a_conformed_dimension_for_actuals_and_plan():
+    from analystos_engine.semantic.joins import find_path
+
+    model = semantic_model()
+    assert model.get_dimension("category").entity == "product_categories"
+    for dim_entity in ("product_categories", "regions", "customer_segments"):
+        for fact in ("order_lines", "sales_plan"):
+            assert find_path(model, fact, dim_entity, safe_only=True) is not None, (fact, dim_entity)
+    assert find_path(model, "opex_plan", "regions", safe_only=True) is not None
+    # Supplier is governed and reachable from order lines (a drill below the plan grain), not from the plan.
+    assert model.get_dimension("supplier").entity == "suppliers"
+    assert find_path(model, "order_lines", "suppliers", safe_only=True) is not None
+    assert find_path(model, "sales_plan", "suppliers", safe_only=True) is None
+    assert model.get_metric("median_first_response_hours").agg == "median"
 
 
 def test_every_entity_has_grain_and_all_relationships_reference_known_columns(demo):
@@ -104,6 +167,8 @@ def test_every_entity_has_grain_and_all_relationships_reference_known_columns(de
         "opex_budget",
     }
     cols["budgets_category"] = {"category", "budget_month", "revenue_budget", "units_budget"}
+    assert {"revenue_forecast", "operating_expenses"} & set(cols) == {"operating_expenses"}
+    assert "delivery_fleet" not in cols["operating_expenses"], "one thing called freight: orders.freight_cost"
     ent_table = {e.name: e.table for e in model.entities}
     for r in model.relationships:
         assert r.from_col in cols[ent_table[r.from_entity]], r.id

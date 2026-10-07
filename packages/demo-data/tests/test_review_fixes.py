@@ -53,9 +53,9 @@ def test_inventory_value_is_read_at_the_snapshot_not_summed(loaded):
     q2_25 = TimeWindow(start=dt.date(2025, 4, 1), end=dt.date(2025, 7, 1))
     _, cur = run_metric_query(store, model, MetricQuery(metrics=["inventory_value"], time=q2_26))
     _, base = run_metric_query(store, model, MetricQuery(metrics=["inventory_value"], time=q2_25))
-    assert cur.rows[0][0] == pytest.approx(17_297_065.93, abs=1)
+    assert cur.rows[0][0] == pytest.approx(17_210_821.53, abs=1)
     assert base.rows[0][0] == pytest.approx(13_190_987.31, abs=1)
-    assert cur.rows[0][0] / base.rows[0][0] - 1 == pytest.approx(0.3113, abs=5e-4)
+    assert cur.rows[0][0] / base.rows[0][0] - 1 == pytest.approx(0.3047, abs=5e-4)
 
 
 def test_recent_conversion_cohorts_are_flagged_immature(loaded):

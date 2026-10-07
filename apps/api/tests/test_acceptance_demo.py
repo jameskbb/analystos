@@ -395,6 +395,28 @@ def test_home_search_and_explore(demo: dict[str, Any]) -> None:
     home = c.get(f"{base}/home").json()
     assert home["counts"]["datasets"] >= 15 and home["quality_failures"]
     assert any(ch["metric_id"] == "revenue" for ch in home["changes"])
+    # Against plan, latest closed quarter: the answer key's flagship story, from executed queries.
+    from analystos_demo import bootstrap_paths
+
+    cache = demo["app"].state.aos.settings.data_dir / "demo" / "summit-supply-seed42"
+    story = json.loads(Path(bootstrap_paths(cache_dir=cache).scenarios_path).read_text())["stories"][
+        "operating_profit_miss_q2_2026"
+    ]["headline"]
+    plan = {v["metric_id"]: v for v in home["plan_variances"]}
+    assert plan["revenue"]["period"] == "Q2 2026" and plan["revenue"]["status"] == "on_plan"
+    assert plan["revenue"]["actual"] == pytest.approx(story["revenue_actual"], abs=0.01)
+    assert plan["revenue"]["plan"] == pytest.approx(story["revenue_plan"], abs=0.01)
+    assert plan["operating_profit"]["status"] == "unfavorable"
+    assert plan["operating_profit"]["variance"] == pytest.approx(story["operating_profit_variance"], abs=0.01)
+    # Then the lead metric's tree: gross margin and operating expenses, both below plan for profit.
+    assert [v["metric_id"] for v in home["plan_variances"][:4]] == [
+        "revenue",
+        "operating_profit",
+        "gross_margin",
+        "operating_expenses",
+    ]
+    assert plan["gross_margin"]["status"] == plan["operating_expenses"]["status"] == "unfavorable"
+    assert plan["revenue"]["sql_actual"] and plan["revenue"]["sql_plan"]
     hits = c.get(f"{base}/search", params={"q": "revenue"}).json()
     assert hits[0]["kind"] == "metric" and hits[0]["ref_id"] == "revenue"
     hits = c.get(f"{base}/search", params={"q": "customer_id", "kinds": "column"}).json()

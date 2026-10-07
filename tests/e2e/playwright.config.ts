@@ -8,7 +8,8 @@ const WEB_PORT = Number(process.env.E2E_WEB_PORT ?? 13765);
 const baseURL = process.env.E2E_BASE_URL ?? `http://127.0.0.1:${WEB_PORT}`;
 
 /**
- * Acceptance flows 1 and 2 (spec §96, §97) in a real browser against a running API + web.
+ * Acceptance flows 1 and 2 (spec §96, §97) and the flagship CEO flow in a real browser against a
+ * running API + web.
  * Unless E2E_BASE_URL points at an already running stack, scripts/serve.sh boots both
  * with a throwaway data directory.
  */

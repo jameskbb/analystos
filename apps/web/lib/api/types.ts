@@ -787,6 +787,8 @@ export interface TreeNode {
   annotations?: (Annotation | string)[];
   format?: MetricFormat | string | null;
   metric_format?: MetricFormat | string | null;
+  /** Unit label for non-currency metrics ("h", "leads"), when the metric declares one. */
+  metric_unit?: string | null;
   method?: string | null;
   kind?: "root" | "driver" | "dimension" | "segment" | "other" | "check" | "hypothesis" | "failed" | string | null;
   dimension?: string | null;
@@ -799,6 +801,120 @@ export interface TreeNode {
   /** Analyst decisions carried forward from earlier runs. */
   decision_history?: { from_investigation?: string | null; status?: string | null; carried_as?: string | null; changed?: string[] }[];
   depth?: number;
+  /** Short executive label ("Unit costs above plan"); the statement carries the numbers. */
+  title?: string | null;
+  /** What a check node is for: a premise verdict, the reconciliation, or a related signal. */
+  role?: "premise" | "reconciliation" | "related_signal" | string | null;
+  /** Premise nodes: whether the data supports what the question takes for granted. */
+  verdict?: "supported" | "contradicted" | null;
+  /** Signed effect on the root metric (root units) inside an exact decomposition of the root change. */
+  root_effect?: number | null;
+  /** What `baseline` is ("Plan", "Q1 2026"), so columns are labelled correctly. */
+  baseline_label?: string | null;
+  /** Related signals only: the relationship to the explained change is not established. */
+  relationship?: "not_established" | null;
+  /** Reconciliation nodes only: the identities checked and whether they add back. */
+  reconciliation?: Reconciliation | null;
+  /** Root node: the plan-to-actual bridge (when the engine carries it on the node rather than the investigation). */
+  bridge?: Bridge | null;
+  /** "Other lines, net": the immaterial lines grouped into this node. */
+  members?: { node_id?: string | null; metric_id?: string | null; label: string; amount?: number | null }[] | null;
+  /** Same-segment offset: the sibling line's node in the same segment (e.g. payroll saving in the branch). */
+  offset_node_id?: string | null;
+}
+
+export interface ReconciliationLine {
+  node_id?: string | null;
+  label: string;
+  amount: number;
+}
+
+/** `parent_amount = sum(components) + residual`, checked on executed numbers. */
+export interface ReconciliationIdentity {
+  parent_node_id?: string | null;
+  parent_label: string;
+  parent_amount: number;
+  components: ReconciliationLine[];
+  sum_of_components: number;
+  residual: number;
+  reconciled: boolean;
+  method?: string;
+}
+
+export interface Reconciliation {
+  metric_id: string;
+  metric_label: string;
+  metric_format?: string | null;
+  actual: number;
+  baseline: number;
+  gap: number;
+  tolerance: number;
+  reconciled: boolean;
+  identities: ReconciliationIdentity[];
+}
+
+/** One step of a plan-to-actual bridge: a reconciled leaf effect on the root metric. */
+export interface BridgeStep {
+  node_id?: string | null;
+  label: string;
+  /** Signed, in the root metric's units (negative lowers it). */
+  amount: number;
+  /** The first-level part the step belongs to ("Gross Margin"), for grouping. */
+  group_label?: string | null;
+  group_node_id?: string | null;
+  /** Value after this step (start plus the amounts so far), as the engine computed it. */
+  running_total?: number | null;
+}
+
+/** Plan value, then each reconciled effect, then the actual value: sum(steps) + residual = end - start. */
+export interface Bridge {
+  metric_id: string;
+  metric_label: string;
+  metric_format?: string | null;
+  start_label: string;
+  start: number;
+  end_label: string;
+  end: number;
+  /** end - start */
+  gap?: number | null;
+  steps: BridgeStep[];
+  residual?: number | null;
+  reconciled?: boolean | null;
+  tolerance?: number | null;
+  /** Ready ECharts waterfall option (the web draws its own from the same numbers). */
+  chart?: Record<string, unknown> | null;
+  /** metric_result artifact holding the same data, for lineage to SQL. */
+  artifact_id?: string | null;
+}
+
+/**
+ * A verified observation on another governed metric where the explanation concentrates. Its
+ * relationship to the explained change is not established; it is never part of the reconciled tree.
+ * `node_id` is the tree node (role "related_signal") carrying status, evidence and lineage.
+ */
+export interface RelatedSignal {
+  node_id: string;
+  metric_id: string;
+  metric_label: string;
+  metric_format?: string | null;
+  unit?: string | null;
+  title: string;
+  statement: string;
+  segment_path: Segment[];
+  window: TimeWindow;
+  baseline_window: TimeWindow;
+  current?: number | null;
+  baseline?: number | null;
+  abs_change?: number | null;
+  pct_change?: number | null;
+  relationship: "not_established";
+  relationship_note: string;
+  shared_with?: Segment[];
+  linked_node_ids?: string[];
+  supporting_node_ids?: string[];
+  artifact_ids?: string[];
+  evidence_strength?: EvidenceStrength;
+  provisional?: boolean;
 }
 
 export interface InvestigationTree {
@@ -845,8 +961,10 @@ export interface Premise {
   text: string;
   term: string;
   metric_id?: string | null;
-  expectation: "flat" | "increase" | "decrease";
+  expectation: "flat" | "increase" | "decrease" | "meets_plan" | "misses_plan" | string;
   tolerance?: number;
+  /** meets_plan / misses_plan: the plan, budget or target metric the premise names. */
+  baseline_metric_id?: string | null;
 }
 
 export interface PeriodCandidate {
@@ -943,6 +1061,12 @@ export interface Investigation {
   } | null;
   /** tree node id → finding id for nodes saved as findings. */
   node_findings?: Record<string, ID>;
+  /** Verified observations next to the explanation, relationship not established. */
+  related_signals?: RelatedSignal[];
+  /** Plan-to-actual bridge of the root metric through the reconciled explanation. */
+  bridge?: Bridge | null;
+  /** Two or three short sentences (gap, split, biggest causes); `brief_answer` keeps the long form. */
+  brief_lead?: string | null;
   completed_at?: ISODate | null;
 }
 
@@ -1394,6 +1518,31 @@ export interface HomeChange {
   sql?: string | null;
 }
 
+/** One metric's actual against its plan metric over the latest closed quarter (GET /home). */
+export interface PlanVariance {
+  metric_id: string;
+  label: string;
+  format: string;
+  /** The plain word for the metric from the glossary and synonyms ("sales", "net profit"). */
+  stakeholder_term?: string;
+  plan_metric_id: string;
+  plan_label: string;
+  plan_role: "plan" | "budget" | "forecast" | string;
+  period: string;
+  window_start: string;
+  window_end: string;
+  actual: number | null;
+  plan: number | null;
+  variance: number | null;
+  variance_pct: number | null;
+  higher_is_better: boolean;
+  status: "on_plan" | "favorable" | "unfavorable" | string;
+  tolerance: number;
+  sql_actual: string;
+  sql_plan: string;
+  metric_versions?: Record<string, string>;
+}
+
 export interface HomeDataset {
   id: ID;
   name: string;
@@ -1428,6 +1577,9 @@ export interface HomeSummary {
   pending_relationships?: number;
   running_jobs?: Job[];
   changes: HomeChange[];
+  changes_note?: string | null;
+  plan_variances?: PlanVariance[];
+  plan_note?: string | null;
 }
 
 export interface WorkspaceSettingsDoc {

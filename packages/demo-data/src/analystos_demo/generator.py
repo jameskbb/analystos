@@ -26,7 +26,7 @@ from pydantic import BaseModel, Field
 from . import catalog as cat
 from . import stories as st
 
-GENERATOR_VERSION = "1.1.0"
+GENERATOR_VERSION = "2.0.0"
 _CODE_FILES = ("catalog.py", "stories.py", "generator.py", "measure.py")
 
 
@@ -199,21 +199,24 @@ def _products(rng: np.random.Generator) -> pd.DataFrame:
     return df
 
 
-def _cost_index(months: _Months) -> dict[str, np.ndarray]:
+def _cost_index(months: _Months, prod: pd.DataFrame) -> np.ndarray:
+    """Unit-cost index per product (rows) and month (columns): general inflation plus the
+    planted supplier cost increases (by category, or by category and supplier)."""
     base = 1.0 + 0.0018 * np.arange(months.n)
-    out = {}
-    for c in cat.CATEGORIES:
-        idx = base.copy()
-        shock = st.COST_SHOCK.get(c.name)
-        if shock:
-            level = 0.0
-            for m in range(months.n):
-                label = str(months.periods[m])
-                if label in shock:
-                    level = shock[label]
-                idx[m] *= 1.0 + level
-        out[c.name] = idx
-    return out
+    labels = [str(p) for p in months.periods]
+
+    def ramp(shock: dict[str, float]) -> np.ndarray:
+        level, out = 0.0, np.zeros(months.n)
+        for m, label in enumerate(labels):
+            level = shock.get(label, level)
+            out[m] = level
+        return out
+
+    rows = []
+    for c, supplier in zip(prod["category"], prod["supplier"], strict=True):
+        shock = st.SUPPLIER_COST_SHOCK.get((c, supplier)) or st.COST_SHOCK.get(c)
+        rows.append(base * (1.0 + ramp(shock)) if shock else base)
+    return np.stack(rows)
 
 
 def _price_index(months: _Months) -> np.ndarray:
@@ -474,13 +477,17 @@ def _lines(
     list_price = np.round(prod["list_price"].to_numpy()[product_idx] * price_idx, 2)
     disc = cust["_disc"].to_numpy()[cidx] + rng.normal(0, 0.02, size=len(oidx))
     contractor_from = months.index(st.CONTRACTOR_DISCOUNT_FROM)
-    disc += np.where((lseg == "Contractor") & (lm >= contractor_from), st.CONTRACTOR_DISCOUNT_UPLIFT, 0.0)
+    lregion = orders["_region"].to_numpy()[oidx]
+    uplift = {
+        r: st.CONTRACTOR_DISCOUNT_UPLIFT.get(r, st.CONTRACTOR_DISCOUNT_UPLIFT["default"]) for r in cat.REGIONS
+    }
+    uplift_by_line = pd.Series(lregion).map(uplift).to_numpy(dtype=float)
+    disc += np.where((lseg == "Contractor") & (lm >= contractor_from), uplift_by_line, 0.0)
     promo = (lm == aug) & (rng.random(len(oidx)) < st.AUG_PROMO_LINE_SHARE)
     disc += np.where(promo, st.AUG_PROMO_EXTRA_DISCOUNT, 0.0)
     disc = np.clip(np.round(disc / 0.005) * 0.005, 0.0, 0.3)
 
-    cost_index = _cost_index(months)
-    cidx_cost = np.array([cost_index[c][m] for c, m in zip(category, lm, strict=True)])
+    cidx_cost = _cost_index(months, prod)[product_idx, lm]
     unit_cost = np.round(prod["base_unit_cost"].to_numpy()[product_idx] * cidx_cost, 2)
 
     rep_rate = dict(zip(reps["rep_id"], reps["commission_rate"], strict=True))
@@ -674,9 +681,7 @@ def _inventory(
     slow = prod.index[prod["is_slow_story"]].to_numpy()
     build_from = months.index(st.SLOW_SKU_BUILD_FROM)
     launch_m = months.index(st.SLOW_SKU_LAUNCH[:7])
-    cost_index = _cost_index(months)
-    base_cost = prod["base_unit_cost"].to_numpy()
-    cost = np.round(np.stack([base_cost[i] * cost_index[c] for i, c in enumerate(prod["category"])]), 2)
+    cost = np.round(prod["base_unit_cost"].to_numpy()[:, None] * _cost_index(months, prod), 2)
     base_value = float(
         (on_hand[:, :, months.index("2025-06")] * cost[None, :, months.index("2025-06")]).sum()
     )
@@ -829,6 +834,298 @@ def _leads(
 
 
 # ---------------------------------------------------------------------------------------
+# Operating plan, operating expenses, budgets and targets
+# ---------------------------------------------------------------------------------------
+
+_PLAN_MEASURES = [
+    "quantity",
+    "gross_amount",
+    "discount_amount",
+    "net_amount",
+    "cost_amount",
+    "commission_amount",
+]
+_OPEX_LINES = ["payroll", "overtime", "occupancy", "other_opex"]
+
+
+def _new_stores() -> list[cat.Branch]:
+    """Branches opened during the plan's base year: planned at a run rate, not a prior year."""
+    return [b for b in cat.BRANCHES if date.fromisoformat(b.opened).year == st.PLAN_BASE_YEAR]
+
+
+def _plan_base(lv: pd.DataFrame) -> pd.DataFrame:
+    """Starting point of the FY26 plan per plan month x branch x segment x category.
+
+    Established branches start from the same month of the base year. A branch opened during
+    the base year starts from its Sep-Nov run rate, seasonally adjusted, plus a planned ramp.
+    """
+    keys = ["branch_id", "segment", "category"]
+    py = lv[lv["month"].str.startswith(f"{st.PLAN_BASE_YEAR}-")]
+    base = py.groupby(["month", *keys], as_index=False)[_PLAN_MEASURES].sum()
+    base["plan_month"] = str(st.PLAN_YEAR) + base["month"].str[4:]
+    new_ids = [b.branch_id for b in _new_stores()]
+    parts = [base[~base["branch_id"].isin(new_ids)].assign(new_store=False)]
+    run = list(st.NEW_STORE_RUN_RATE_MONTHS)
+    season_run = float(np.mean([cat.CALENDAR_SEASONALITY[int(m[5:])] for m in run]))
+    for bid in new_ids:
+        rr = (
+            lv[(lv["branch_id"] == bid) & lv["month"].isin(run)]
+            .groupby(keys, as_index=False)[_PLAN_MEASURES]
+            .sum()
+        )
+        rr[_PLAN_MEASURES] = rr[_PLAN_MEASURES] / len(run)
+        for mo in range(1, 13):
+            r = rr.copy()
+            r[_PLAN_MEASURES] = r[_PLAN_MEASURES] * (
+                cat.CALENDAR_SEASONALITY[mo] / season_run * (1 + st.NEW_STORE_RAMP)
+            )
+            r["plan_month"] = f"{st.PLAN_YEAR}-{mo:02d}"
+            parts.append(r.assign(new_store=True))
+    out = pd.concat(parts, ignore_index=True).drop(columns=["month"])
+    return out.sort_values(["plan_month", *keys], kind="stable").reset_index(drop=True)
+
+
+def _operating_plan(rng: np.random.Generator, lv: pd.DataFrame) -> pd.DataFrame:
+    """The FY26 Operating Plan at month x branch x segment x category (the finest plan grain).
+
+    Volume grows by segment (plus an FP&A adjustment per branch and segment), list prices rise
+    PLAN_LIST_PRICE_INCREASE, unit costs PLAN_COST_INFLATION, and each cell keeps its prior-year
+    discount rate and commission rate. Contractor volume growth is solved so the Q2 plan sits
+    TARGET_Q2_REVENUE_VS_PLAN below the calibrated Q2 actual; it depends only on base-year data.
+    """
+    base = _plan_base(lv)
+    adj = {
+        (b.branch_id, s): float(rng.normal(0, st.PLAN_FPA_ADJUSTMENT_SD))
+        for b in cat.BRANCHES
+        for s in cat.SEGMENTS
+    }
+    price, cost = 1 + st.PLAN_LIST_PRICE_INCREASE, 1 + st.PLAN_COST_INFLATION
+    fpa = np.array([1 + adj[(b, s)] for b, s in zip(base["branch_id"], base["segment"], strict=True)])
+    fpa = np.where(base["new_store"], 1.0, fpa)
+    contractor = (base["segment"] == "Contractor").to_numpy() & ~base["new_store"].to_numpy()
+    growth = base["segment"].map(st.PLAN_VOLUME_GROWTH).fillna(0.0).to_numpy()
+    growth = np.where(base["new_store"], 0.0, growth)
+    q2 = base["plan_month"].isin([f"{st.PLAN_YEAR}-{m:02d}" for m in (4, 5, 6)]).to_numpy()
+    net_at_price = base["net_amount"].to_numpy() * fpa * price
+    q2_base = lv[lv["month"].isin([f"{st.PLAN_BASE_YEAR}-{m:02d}" for m in (4, 5, 6)])]["net_amount"].sum()
+    target = q2_base * (1 + st.TARGET_Q2_REVENUE_YOY) / (1 + st.TARGET_Q2_REVENUE_VS_PLAN)
+    fixed = (net_at_price * (1 + growth))[q2 & ~contractor].sum()
+    contractor_growth = (target - fixed) / net_at_price[q2 & contractor].sum() - 1
+    vol = fpa * (1 + np.where(contractor, contractor_growth, growth))
+    plan = base[["plan_month", "branch_id", "segment", "category"]].copy()
+    plan["plan_units"] = base["quantity"].to_numpy() * vol
+    plan["plan_gross_revenue"] = base["gross_amount"].to_numpy() * vol * price
+    plan["plan_discount_amount"] = base["discount_amount"].to_numpy() * vol * price
+    plan["plan_revenue"] = plan["plan_gross_revenue"] - plan["plan_discount_amount"]
+    plan["plan_cogs"] = base["cost_amount"].to_numpy() * vol * cost
+    plan["plan_sales_commission"] = base["commission_amount"].to_numpy() * vol * price
+    plan["region"] = plan["branch_id"].map({b.branch_id: b.region for b in cat.BRANCHES})
+    return plan
+
+
+def _sales_plan_table(plan: pd.DataFrame) -> pd.DataFrame:
+    """The published plan: month x region x segment x category, on conformed dimensions."""
+    keys = ["plan_month", "region", "segment", "category"]
+    cols = ["plan_units", "plan_gross_revenue", "plan_discount_amount", "plan_cogs", "plan_sales_commission"]
+    t = plan.groupby(keys, as_index=False)[cols].sum()
+    t["plan_units"] = np.round(t["plan_units"]).astype(np.int64)
+    for c in cols[1:]:
+        t[c] = np.round(t[c], 2)
+    t["plan_revenue"] = np.round(t["plan_gross_revenue"] - t["plan_discount_amount"], 2)
+    t["plan_month"] = t["plan_month"] + "-01"
+    t["plan_version"] = st.PLAN_VERSION
+    order = pd.Categorical(t["region"], categories=list(cat.REGIONS), ordered=True)
+    t = t.assign(_r=order).sort_values(["plan_month", "_r", "segment", "category"], kind="stable")
+    return t[
+        [
+            "plan_month",
+            "region",
+            "segment",
+            "category",
+            "plan_units",
+            "plan_gross_revenue",
+            "plan_discount_amount",
+            "plan_revenue",
+            "plan_cogs",
+            "plan_sales_commission",
+            "plan_version",
+        ]
+    ].reset_index(drop=True)
+
+
+def _opex_actuals(rng: np.random.Generator, br_rev: pd.Series, months: _Months) -> pd.DataFrame:
+    """Branch operating expenses and headcount by month (freight and commission live on orders
+    and lines). Staffing follows square footage and revenue; payroll is headcount x loaded cost."""
+    story_from = pd.Period(st.OVERTIME_STORY_FROM, freq="M")
+    rows = []
+    for mo in months.periods:
+        years_on = max(0, mo.year - st.PLAN_BASE_YEAR)
+        step = {k: 1 + v * years_on for k, v in cat.ANNUAL_COST_STEP.items()}
+        wage = cat.PAYROLL_PER_FTE * step["payroll"]
+        for b in cat.BRANCHES:
+            if pd.Timestamp(b.opened) > mo.end_time:
+                continue
+            a = float(br_rev.get((str(mo), b.branch_id), 0.0))
+            staffing = (b.sq_ft * cat.PAYROLL_PER_SQFT + cat.PAYROLL_PER_REVENUE * a) / cat.PAYROLL_PER_FTE
+            fte = max(1, round(staffing))
+            overtime = cat.OVERTIME_SHARE_OF_PAYROLL * fte * wage * rng.uniform(0.8, 1.2)
+            if b.branch_id in st.OVERTIME_STORY_BRANCHES and mo >= story_from:
+                fte -= st.OPEN_POSITIONS
+                overtime += st.OVERTIME_STORY_MONTHLY * rng.uniform(0.9, 1.1)
+            payroll = fte * wage * rng.uniform(0.99, 1.01)
+            occupancy = b.sq_ft * cat.OCCUPANCY_PER_SQFT * step["occupancy"]
+            other = (b.sq_ft * cat.OTHER_OPEX_PER_SQFT + cat.OTHER_OPEX_PER_REVENUE * a) * step["other_opex"]
+            other *= rng.uniform(0.9, 1.1)
+            rows.append(
+                {
+                    "expense_month": f"{mo}-01",
+                    "branch_id": b.branch_id,
+                    "headcount": fte,
+                    "payroll": round(payroll, 2),
+                    "overtime": round(overtime, 2),
+                    "occupancy": round(occupancy, 2),
+                    "other_opex": round(other, 2),
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+def _opex_plan(
+    opex: pd.DataFrame, freight: pd.DataFrame, br_rev: pd.Series, plan: pd.DataFrame
+) -> pd.DataFrame:
+    """FY26 opex plan per branch and month.
+
+    Branch lines are the same month of the base year x (1 + PLAN_OPEX_GROWTH), at the same
+    headcount. Base freight and deliveries scale with the branch's plan revenue at their
+    base-year ratios (base freight plus PLAN_FREIGHT_RATE_INCREASE); the fuel surcharge keeps its
+    base-year share of base freight. A branch opened in the base year uses its Sep-Nov run rate.
+    """
+    ox = opex.assign(month=opex["expense_month"].str[:7]).set_index(["month", "branch_id"])
+    plan_rev = plan.groupby(["plan_month", "branch_id"])["plan_revenue"].sum()
+    new_ids = {b.branch_id for b in _new_stores()}
+    run = list(st.NEW_STORE_RUN_RATE_MONTHS)
+    rows = []
+    for mo in range(1, 13):
+        pm, bm = f"{st.PLAN_YEAR}-{mo:02d}", f"{st.PLAN_BASE_YEAR}-{mo:02d}"
+        for b in cat.BRANCHES:
+            src = run if b.branch_id in new_ids else [bm]
+            lines = ox.loc[[(m, b.branch_id) for m in src], ["headcount", *_OPEX_LINES]].mean()
+            fr = freight.reindex([(m, b.branch_id) for m in src]).fillna(0.0).sum()
+            r = sum(float(br_rev.get((m, b.branch_id), 0.0)) for m in src)
+            rev = float(plan_rev.get((pm, b.branch_id), 0.0))
+            base = rev * float(fr["base_freight"]) / r * (1 + st.PLAN_FREIGHT_RATE_INCREASE) if r else 0.0
+            fuel = (
+                base * float(fr["fuel_surcharge"]) / float(fr["base_freight"]) if fr["base_freight"] else 0.0
+            )
+            row: dict[str, Any] = {"plan_month": f"{pm}-01", "branch_id": b.branch_id}
+            row["plan_base_freight"] = round(base, 2)
+            row["plan_fuel_surcharge"] = round(fuel, 2)
+            row["plan_freight_cost"] = round(row["plan_base_freight"] + row["plan_fuel_surcharge"], 2)
+            row["plan_deliveries"] = int(round(rev * float(fr["deliveries"]) / r)) if r else 0
+            row["plan_headcount"] = int(round(float(lines["headcount"])))
+            for k in _OPEX_LINES:
+                row[f"plan_{k}"] = round(float(lines[k]) * (1 + st.PLAN_OPEX_GROWTH[k]), 2)
+            row["plan_version"] = st.PLAN_VERSION
+            rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def _budgets(
+    rng: np.random.Generator,
+    lv: pd.DataFrame,
+    br_opex_total: pd.Series,
+    plan: pd.DataFrame,
+    opex_plan: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """budgets.xlsx: FY25 rows are last year's budget; FY26 rows allocate the operating plan."""
+    br_act = lv.groupby(["month", "branch_id"])["net_amount"].sum()
+    p_br = plan.groupby(["plan_month", "branch_id"])[
+        ["plan_revenue", "plan_cogs", "plan_sales_commission"]
+    ].sum()
+    ox_plan = opex_plan.assign(
+        total=opex_plan[[f"plan_{k}" for k in ["freight_cost", *_OPEX_LINES]]].sum(axis=1),
+        month=opex_plan["plan_month"].str[:7],
+    ).set_index(["month", "branch_id"])["total"]
+    br_rows = []
+    for b in cat.BRANCHES:
+        for y in (st.PLAN_BASE_YEAR, st.PLAN_YEAR):
+            for mo in range(1, 13):
+                key = (f"{y}-{mo:02d}", b.branch_id)
+                if y == st.PLAN_BASE_YEAR:
+                    rev = float(br_act.get(key, 0.0)) * rng.uniform(0.97, 1.06)
+                    gm = rev * 0.26
+                    opex = float(br_opex_total.get(key, 0.0)) * rng.uniform(0.97, 1.03)
+                else:
+                    p = p_br.loc[key] if key in p_br.index else pd.Series(0.0, index=p_br.columns)
+                    rev = float(p["plan_revenue"])
+                    gm = rev - float(p["plan_cogs"])
+                    opex = float(ox_plan.get(key, 0.0)) + float(p["plan_sales_commission"])
+                br_rows.append(
+                    {
+                        "branch_id": b.branch_id,
+                        "branch_name": b.name,
+                        "budget_month": datetime(y, mo, 1),
+                        "revenue_budget": int(round(rev, -2)),
+                        "gross_margin_budget": int(round(gm, -2)),
+                        "opex_budget": int(round(opex, -2)),
+                    }
+                )
+    branch_budget = pd.DataFrame(br_rows)
+    cat_act = lv.groupby(["month", "category"])[["net_amount", "quantity"]].sum()
+    p_cat = plan.groupby(["plan_month", "category"])[["plan_revenue", "plan_units"]].sum()
+    cb_rows = []
+    for c in cat.CATEGORIES:
+        for y in (st.PLAN_BASE_YEAR, st.PLAN_YEAR):
+            for mo in range(1, 13):
+                key = (f"{y}-{mo:02d}", c.name)
+                if y == st.PLAN_BASE_YEAR:
+                    g = rng.uniform(0.97, 1.05)
+                    rev, units = (
+                        float(cat_act.loc[key, "net_amount"]) * g,
+                        float(cat_act.loc[key, "quantity"]) * g,
+                    )
+                else:
+                    rev, units = float(p_cat.loc[key, "plan_revenue"]), float(p_cat.loc[key, "plan_units"])
+                cb_rows.append(
+                    {
+                        "category": c.name,
+                        "budget_month": datetime(y, mo, 1),
+                        "revenue_budget": int(round(rev, -2)),
+                        "units_budget": int(round(units, -1)),
+                    }
+                )
+    return branch_budget, pd.DataFrame(cb_rows)
+
+
+def _targets(
+    rng: np.random.Generator, reps: pd.DataFrame, branch_budget: pd.DataFrame, plan: pd.DataFrame
+) -> pd.DataFrame:
+    """Monthly rep quotas: FY25 splits the FY25 budget, FY26 splits the operating plan revenue."""
+    p_br = plan.groupby(["plan_month", "branch_id"])["plan_revenue"].sum()
+    rows = []
+    for b in cat.BRANCHES:
+        b_reps = reps[reps["branch_id"] == b.branch_id]["rep_id"].to_numpy()
+        shares = rng.dirichlet(np.full(len(b_reps), 6.0))
+        for row in branch_budget[branch_budget["branch_id"] == b.branch_id].itertuples(index=False):
+            month = row.budget_month.strftime("%Y-%m")
+            if row.budget_month.year == st.PLAN_YEAR:
+                total = float(p_br.get((month, b.branch_id), 0.0))
+            else:
+                total = float(row.revenue_budget)
+            for rep_id, share in zip(b_reps, shares, strict=True):
+                rows.append(
+                    {
+                        "target_month": f"{month}-01",
+                        "rep_id": rep_id,
+                        "branch_id": b.branch_id,
+                        "revenue_target": round(total * share, 2),
+                        "new_accounts_target": int(rng.integers(1, 5)),
+                    }
+                )
+    return pd.DataFrame(rows)
+
+
+# ---------------------------------------------------------------------------------------
 # Writers
 # ---------------------------------------------------------------------------------------
 
@@ -858,7 +1155,9 @@ def _write_budgets_xlsx(path: Path, branch_budget: pd.DataFrame, cat_budget: pd.
     ws.title = "Branch Budget"
     ws["A1"] = f"{cat.COMPANY} | Revenue & Margin Budget by Branch"
     ws["A1"].font = Font(bold=True, size=14)
-    ws["A2"] = "FY2025-FY2026 operating plan | Prepared by FP&A | Version 3 (final) | USD"
+    ws["A2"] = (
+        "FY2025 budget and FY2026 Operating Plan allocation | Prepared by FP&A | Version 3 (final) | USD"
+    )
     ws["A3"] = None
     headers = ["Branch ID", "Branch", "Budget Month", "Revenue Budget", "Gross Margin Budget", "Opex Budget"]
     ws.append([])  # row 4 intentionally blank
@@ -891,15 +1190,19 @@ def _write_budgets_xlsx(path: Path, branch_budget: pd.DataFrame, cat_budget: pd.
         row=r,
         column=1,
         value=(
-            "Notes: Plano opened May 2025 (partial-year budget). Budgets exclude freight recovery and rebates. "
-            "Opex includes branch payroll, occupancy and delivery fleet."
+            "Notes: FY2026 rows are the branch allocation of the FY26 Operating Plan (board approved Dec 2025). "
+            "Plano opened May 2025 and is planned at its run rate plus ramp. Budgets exclude freight recovery and "
+            "rebates. Opex includes freight, sales commission, branch payroll and overtime, occupancy and other "
+            "operating costs."
         ),
     )
 
     ws2 = wb.create_sheet("Category Budget")
     ws2["A1"] = "Category revenue & unit budget (company total)"
     ws2["A1"].font = Font(bold=True, size=12)
-    ws2["A2"] = "Source: FY plans. Units are planning units, not SKUs."
+    ws2["A2"] = (
+        "Source: FY2025 category budget; FY2026 rows allocate the FY26 Operating Plan. Units are planning units, not SKUs."
+    )
     headers2 = ["Category", "Budget Month", "Revenue Budget", "Units Budget"]
     for i, h in enumerate(headers2, start=1):
         ws2.cell(row=4, column=i, value=h).font = Font(bold=True)
@@ -912,7 +1215,7 @@ def _write_budgets_xlsx(path: Path, branch_budget: pd.DataFrame, cat_budget: pd.
     ws2.cell(
         row=5 + len(cat_budget) + 1,
         column=1,
-        value="Notes: category plan is top-down; does not tie to branch plan by design.",
+        value="Notes: FY2025 category budget was top-down and does not tie to the FY2025 branch budget.",
     )
     wb.properties.creator = "Summit Supply FP&A"
     wb.properties.created = datetime(2026, 1, 1)
@@ -999,7 +1302,20 @@ def generate(out_dir: str | Path, seed: int = 42) -> Manifest:
 
     order_net = np.bincount(lines["_oidx"].to_numpy(), weights=lines["net_amount"], minlength=len(orders))
     delivered = orders["channel"].to_numpy() != "Counter"
-    orders["freight_cost"] = np.round(np.where(delivered, 18 + 0.021 * np.maximum(order_net, 0), 0.0), 2)
+    # Freight is every outbound delivery cost (own fleet and carriers): base freight plus the
+    # carrier fuel surcharge, both on the order. Carrier rates step up each January; the April
+    # 2026 fuel surcharge spike is the Story 0 freight overrun.
+    om = orders["_m"].to_numpy()
+    rate_step = np.array([1.0 + cat.FREIGHT_ANNUAL_INCREASE * max(0, p.year - 2025) for p in months.periods])[
+        om
+    ]
+    fuel_rate = np.where(
+        om >= months.index(st.FUEL_SURCHARGE_FROM), st.FUEL_SURCHARGE_SPIKE, cat.FUEL_SURCHARGE_RATE
+    )
+    base = (cat.FREIGHT_PER_DELIVERY + cat.FREIGHT_RATE * np.maximum(order_net, 0)) * rate_step
+    orders["base_freight"] = np.round(np.where(delivered, base, 0.0), 2)
+    orders["fuel_surcharge"] = np.round(np.where(delivered, base * fuel_rate, 0.0), 2)
+    orders["freight_cost"] = np.round(orders["base_freight"] + orders["fuel_surcharge"], 2)
     orders["status"] = np.where(
         cancelled,
         "cancelled",
@@ -1016,7 +1332,7 @@ def generate(out_dir: str | Path, seed: int = 42) -> Manifest:
     inventory = _inventory(r_inv, orders, lines, prod, months)
     leads, opps = _leads(r_lead, reps, months)
 
-    # Monthly actuals used by plan tables (forecast, budget, targets).
+    # Monthly actuals the plan tables start from (plan, budgets, targets).
     lines_live = lines[lines["line_status"] != "cancelled"]
     o_small = orders[["order_id", "order_date", "branch_id", "customer_id"]].copy()
     o_small["month"] = o_small["order_date"].str[:7]
@@ -1026,129 +1342,36 @@ def generate(out_dir: str | Path, seed: int = 42) -> Manifest:
         .merge(branches[["branch_id", "region"]], on="branch_id")
     )
     lv = lv.merge(prod[["product_id", "category"]], on="product_id")
-
-    # Forecast: FY26 plan = 2025 actual x (1 + growth), by month x region x segment.
-    act = lv.groupby(["month", "region", "segment"], as_index=False)["net_amount"].sum()
-    rows = []
-    for mo in range(1, 13):
-        base_m = f"2025-{mo:02d}"
-        for region in cat.REGIONS:
-            for s in cat.SEGMENTS:
-                a = act[(act["month"] == base_m) & (act["region"] == region) & (act["segment"] == s)][
-                    "net_amount"
-                ].sum()
-                rows.append(
-                    {
-                        "forecast_month": f"2026-{mo:02d}-01",
-                        "region": region,
-                        "segment": s,
-                        "forecast_revenue": round(
-                            float(a) * (1 + st.FORECAST_GROWTH) * (1 + r_plan.normal(0, 0.01)), 2
-                        ),
-                        "forecast_version": st.FORECAST_VERSION,
-                        "created_date": "2025-12-12",
-                        "method": "Prior-year actual x 1.05 growth, FP&A adjusted",
-                    }
-                )
-    forecast = pd.DataFrame(rows)
-
-    # Budgets (Excel): branch x month and category x month for 2025-2026.
-    br_act = lv.groupby(["month", "branch_id"], as_index=False)["net_amount"].sum()
-    br_rows = []
-    for b in cat.BRANCHES:
-        for y in (2025, 2026):
-            for mo in range(1, 13):
-                a25 = br_act[(br_act["month"] == f"2025-{mo:02d}") & (br_act["branch_id"] == b.branch_id)][
-                    "net_amount"
-                ].sum()
-                rev = (
-                    a25 * r_plan.uniform(0.97, 1.06) if y == 2025 else a25 * 1.06 * r_plan.uniform(0.98, 1.02)
-                )
-                if b.branch_id == "BR-PLN" and y == 2026 and mo <= 4:
-                    rev = br_act[(br_act["month"] == "2025-06") & (br_act["branch_id"] == b.branch_id)][
-                        "net_amount"
-                    ].sum()
-                br_rows.append(
-                    {
-                        "branch_id": b.branch_id,
-                        "branch_name": b.name,
-                        "budget_month": datetime(y, mo, 1),
-                        "revenue_budget": int(round(rev, -2)),
-                        "gross_margin_budget": int(round(rev * 0.255, -2)),
-                        "opex_budget": int(round(rev * 0.125 + b.sq_ft * 0.35, -2)),
-                    }
-                )
-    branch_budget = pd.DataFrame(br_rows)
-    cat_act = lv.groupby(["month", "category"], as_index=False).agg(
-        net=("net_amount", "sum"), units=("quantity", "sum")
+    br_rev = lv.groupby(["month", "branch_id"])["net_amount"].sum()
+    live_orders = orders[~cancelled].assign(month=lambda d: d["order_date"].str[:7])
+    freight_parts = (
+        live_orders.assign(deliveries=(live_orders["channel"] != "Counter").astype(int))
+        .groupby(["month", "branch_id"])[["base_freight", "fuel_surcharge", "freight_cost", "deliveries"]]
+        .sum()
     )
-    cb_rows = []
-    for c in cat.CATEGORIES:
-        for y in (2025, 2026):
-            for mo in range(1, 13):
-                a = cat_act[(cat_act["month"] == f"2025-{mo:02d}") & (cat_act["category"] == c.name)]
-                g = r_plan.uniform(0.97, 1.05) if y == 2025 else 1.05
-                cb_rows.append(
-                    {
-                        "category": c.name,
-                        "budget_month": datetime(y, mo, 1),
-                        "revenue_budget": int(round(float(a["net"].sum()) * g, -2)),
-                        "units_budget": int(round(float(a["units"].sum()) * g, -1)),
-                    }
-                )
-    cat_budget = pd.DataFrame(cb_rows)
+    freight = freight_parts["freight_cost"]
+    commission = lv.groupby(["month", "branch_id"])["commission_amount"].sum()
 
-    # Rep targets: branch budget split across that branch's reps.
-    t_rows = []
-    for b in cat.BRANCHES:
-        b_reps = reps[reps["branch_id"] == b.branch_id]["rep_id"].to_numpy()
-        shares = r_plan.dirichlet(np.full(len(b_reps), 6.0))
-        for row in branch_budget[branch_budget["branch_id"] == b.branch_id].itertuples(index=False):
-            for rep_id, share in zip(b_reps, shares, strict=True):
-                t_rows.append(
-                    {
-                        "target_month": row.budget_month.strftime("%Y-%m-%d"),
-                        "rep_id": rep_id,
-                        "branch_id": b.branch_id,
-                        "revenue_target": round(row.revenue_budget * share, 2),
-                        "new_accounts_target": int(r_plan.integers(1, 5)),
-                    }
-                )
-    targets = pd.DataFrame(t_rows)
-
-    # Operating expenses (actuals) by branch and month.
-    all_act = br_act.set_index(["month", "branch_id"])["net_amount"]
-    ox_rows = []
-    for mo in months.periods:
-        for b in cat.BRANCHES:
-            if pd.Timestamp(b.opened) > mo.end_time:
-                continue
-            a = float(all_act.get((str(mo), b.branch_id), 0.0))
-            fixed = b.sq_ft * 1.9
-            ox_rows.append(
-                {
-                    "expense_month": f"{mo}-01",
-                    "branch_id": b.branch_id,
-                    "payroll": round(fixed * 1.4 + 0.055 * a * r_opex.uniform(0.95, 1.05), 2),
-                    "occupancy": round(fixed * 0.55, 2),
-                    "delivery_fleet": round(0.018 * a * r_opex.uniform(0.9, 1.1), 2),
-                    "other_opex": round(fixed * 0.2 * r_opex.uniform(0.8, 1.2), 2),
-                }
-            )
-    opex = pd.DataFrame(ox_rows)
-    opex["total_opex"] = opex[["payroll", "occupancy", "delivery_fleet", "other_opex"]].sum(axis=1).round(2)
+    opex = _opex_actuals(r_opex, br_rev, months)
+    br_opex_total = (
+        opex.assign(month=opex["expense_month"].str[:7])
+        .set_index(["month", "branch_id"])[_OPEX_LINES]
+        .sum(axis=1)
+    )
+    br_opex_total = br_opex_total.add(freight, fill_value=0.0).add(commission, fill_value=0.0)
+    plan = _operating_plan(r_plan, lv)
+    sales_plan = _sales_plan_table(plan)
+    opex_plan = _opex_plan(opex, freight_parts, br_rev, plan)
+    branch_budget, cat_budget = _budgets(r_plan, lv, br_opex_total, plan, opex_plan)
+    targets = _targets(r_plan, reps, branch_budget, plan)
 
     # Product costs by month (the COGS source of truth for unit cost changes).
-    cost_index = _cost_index(months)
     pc = pd.DataFrame(
         {
             "product_id": np.repeat(prod["product_id"].to_numpy(), months.n),
             "cost_month": np.tile([f"{p}-01" for p in months.periods], len(prod)),
             "unit_cost": np.round(
-                np.concatenate(
-                    [prod["base_unit_cost"].iloc[i] * cost_index[c] for i, c in enumerate(prod["category"])]
-                ),
-                2,
+                (prod["base_unit_cost"].to_numpy()[:, None] * _cost_index(months, prod)).ravel(), 2
             ),
         }
     )
@@ -1196,7 +1419,18 @@ def generate(out_dir: str | Path, seed: int = 42) -> Manifest:
     ]
     cust_out = cust_out[cust_cols]
 
+    # Suppliers: a clean master keyed by supplier_id; the product's free-text supplier stays messy.
+    supplier_rows: dict[str, dict[str, str]] = {}
+    for c in cat.CATEGORIES:
+        for name in cat.SUPPLIERS[c.name]:
+            if name not in supplier_rows:
+                sid = f"SUP-{len(supplier_rows) + 1:02d}"
+                supplier_rows[name] = {"supplier_id": sid, "supplier_name": name, "primary_category": c.name}
+    suppliers = pd.DataFrame(list(supplier_rows.values()))
     prod_out = prod.copy()
+    prod_out["supplier_id"] = prod_out["supplier"].map(
+        {k: v["supplier_id"] for k, v in supplier_rows.items()}
+    )
     sup = prod_out["supplier"].to_numpy().astype(str)
     z = r_mess.random(len(sup))
     prod_out["supplier"] = np.where(z < 0.08, np.char.upper(sup), sup)
@@ -1214,6 +1448,7 @@ def generate(out_dir: str | Path, seed: int = 42) -> Manifest:
             "list_price",
             "standard_cost",
             "supplier",
+            "supplier_id",
             "launch_date",
         ]
     ]
@@ -1228,6 +1463,8 @@ def generate(out_dir: str | Path, seed: int = 42) -> Manifest:
             "sales_rep_id",
             "channel",
             "status",
+            "base_freight",
+            "fuel_surcharge",
             "freight_cost",
         ]
     ]
@@ -1275,8 +1512,23 @@ def generate(out_dir: str | Path, seed: int = 42) -> Manifest:
         [{"region": r, "region_code": c, "regional_vp": vp} for r, (c, vp) in cat.REGION_INFO.items()]
     )
     segments = pd.DataFrame([{"segment": k, "description": v} for k, v in cat.SEGMENT_INFO.items()])
+    categories = pd.DataFrame(
+        [
+            {
+                "category": c.name,
+                "category_code": c.code,
+                "merchandising_manager": cat.CATEGORY_MANAGERS[c.name],
+            }
+            for c in cat.CATEGORIES
+        ]
+    )
     csv("regions", regions, "Sales regions (conformed dimension shared by actuals, leads and plans)")
     csv("customer_segments", segments, "Customer segments (conformed dimension shared by actuals and plans)")
+    csv(
+        "product_categories",
+        categories,
+        "Product categories (conformed dimension shared by actuals and plans)",
+    )
     csv("branches", branches, "Branch locations; canonical region")
     csv("sales_reps", reps, "Sales reps by branch")
     csv(
@@ -1284,7 +1536,8 @@ def generate(out_dir: str | Path, seed: int = 42) -> Manifest:
         cust_out,
         "Customer master (messy: duplicate rows, null/inconsistent region casing, malformed dates)",
     )
-    csv("products", prod_out, "Product catalog with category and tier")
+    csv("suppliers", suppliers, "Supplier master (conformed supplier names keyed by supplier_id)")
+    csv("products", prod_out, "Product catalog with category, tier and supplier (raw supplier text is messy)")
     csv("product_costs", pc, "Monthly standard unit cost by product")
     csv("orders", orders_out, "Order headers (status includes cancelled)")
     lines_out.to_parquet(out / "order_lines.parquet", index=False, compression="zstd")
@@ -1335,8 +1588,22 @@ def generate(out_dir: str | Path, seed: int = 42) -> Manifest:
         json.dumps(json.loads(opps.to_json(orient="records")), indent=1) + "\n", encoding="utf-8"
     )
     add("opportunities", "opportunities.json", "json", len(opps), "Opportunities created from leads")
-    csv("revenue_forecast", forecast, "FY26 monthly revenue forecast by region and segment")
-    csv("operating_expenses", opex, "Monthly operating expenses by branch")
+    csv(
+        "operating_expenses",
+        opex,
+        "Monthly branch operating expenses: regular payroll, overtime, occupancy, other",
+    )
+    csv(
+        "sales_plan",
+        sales_plan,
+        "FY26 Operating Plan: units, list revenue, discounts, revenue, COGS and commission by month, region, "
+        "segment and category",
+    )
+    csv(
+        "opex_plan",
+        opex_plan,
+        "FY26 Operating Plan: freight and branch operating expenses by month and branch",
+    )
 
     from .measure import measure_scenarios  # local import: measure depends on the written files
 

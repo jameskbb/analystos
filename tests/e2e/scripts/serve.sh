@@ -102,7 +102,7 @@ if [ "$MODE" = "dev" ]; then
   for _ in $(seq 1 120); do curl -fsS -o /dev/null "http://127.0.0.1:$WEB_PORT/" 2>/dev/null && break; sleep 1; done
   for route in / /w/warmup /w/warmup/data /w/warmup/data/warmup /w/warmup/data/relationships \
                /w/warmup/metrics /w/warmup/investigate /w/warmup/investigate/warmup /w/warmup/findings \
-               /w/warmup/reports /w/warmup/reports/warmup; do
+               /w/warmup/reports /w/warmup/reports/warmup /w/warmup/reports/review; do
     curl -s -o /dev/null --max-time 600 "http://127.0.0.1:$WEB_PORT$route" || true
   done
   echo "[e2e] web routes compiled"

@@ -12,6 +12,7 @@ from analystos_investigator import (
     Summary,
     TreeNode,
 )
+from analystos_investigator.models import PlanBridge, RelatedSignal
 from pydantic import BaseModel, Field
 
 from .common import ApiModel, TabularResult
@@ -136,6 +137,18 @@ class InvestigationOut(BaseModel):
     run_count: int
     current_run_id: str | None
     node_findings: dict[str, str] = Field(default_factory=dict, description="tree node id -> finding id")
+    related_signals: list[RelatedSignal] = Field(
+        default_factory=list,
+        description="Verified observations next to the explanation whose relationship to the explained "
+        "change is not established; each is also a tree node with role related_signal",
+    )
+    bridge: PlanBridge | None = Field(
+        default=None,
+        description="Plan-to-actual bridge of the root metric through the reconciled explanation (plan investigations)",
+    )
+    brief_lead: str | None = Field(
+        default=None, description="Two or three short sentences; brief_answer keeps the long form"
+    )
     orchestration: OrchestrationOut | None = None
     error: str | None
     created_by: str | None

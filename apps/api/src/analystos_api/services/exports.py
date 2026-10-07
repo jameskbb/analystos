@@ -319,6 +319,27 @@ def _cols(result: dict[str, Any]) -> list[str]:
     return [c["name"] if isinstance(c, dict) else str(c) for c in result.get("columns", [])]
 
 
+def bridge_rows(bridge: dict[str, Any] | None) -> list[list[str]]:
+    """A plan-to-actual bridge as rows: the start total, each signed step, the end total."""
+    if not bridge or not bridge.get("steps"):
+        return []
+    fmt = bridge.get("metric_format") or "currency"
+    label = bridge.get("metric_label") or ""
+
+    def signed(v: Any) -> str:
+        n = float(v or 0)
+        return ("+" if n > 0 else "-" if n < 0 else "") + fmt_value(abs(n), fmt)
+
+    return [
+        [
+            f"{label}, {str(bridge.get('start_label') or 'start').lower()}",
+            fmt_value(bridge.get("start"), fmt),
+        ],
+        *[[str(s.get("label")), signed(s.get("amount"))] for s in bridge["steps"]],
+        [f"{label}, {str(bridge.get('end_label') or 'end').lower()}", fmt_value(bridge.get("end"), fmt)],
+    ]
+
+
 def included_blocks(blocks: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Blocks the analyst did not exclude (``excluded: true`` blocks never reach an export, review R-32)."""
     return [b for b in blocks or [] if not b.get("excluded")]
@@ -335,6 +356,11 @@ def blocks_to_html(blocks: list[dict[str, Any]], images: dict[str, bytes] | None
             if t == "methodology":
                 parts.append("<h2>Methodology</h2>")
             parts.append(md_to_html(b.get("markdown", "")))
+            if t == "narrative" and bridge_rows(b.get("bridge")):
+                parts.append(table_html(["Bridge", "Amount"], bridge_rows(b.get("bridge"))))
+        elif t == "bridge":
+            parts.append(f"<h3>{e(b.get('title') or 'Bridge')}</h3>")
+            parts.append(table_html(["Bridge", "Amount"], bridge_rows(b)))
         elif t == "summary":
             parts.append(f"<h2>{e(b.get('title') or 'Summary')}</h2>")
             for key, label in (
@@ -430,6 +456,20 @@ def blocks_to_html(blocks: list[dict[str, Any]], images: dict[str, bytes] | None
     return "\n".join(parts)
 
 
+def _plan_suffix(k: dict[str, Any]) -> str:
+    """ ", +0.4% vs plan ($33,750,469)" when a KPI carries a plan comparison, else ""."""
+    if k.get("plan") is None:
+        return ""
+    return (
+        f", {pct(k.get('plan_variance_pct'))} vs {k.get('plan_label') or 'plan'} "
+        f"({fmt_value(k.get('plan'), k.get('format'))})"
+    )
+
+
+def _plan_line_html(k: dict[str, Any]) -> str:
+    return f'<div class="d">{e(_plan_suffix(k).lstrip(", "))}</div>' if k.get("plan") is not None else ""
+
+
 def _kpi_html(items: list[dict[str, Any]]) -> str:
     cells = []
     for k in items:
@@ -438,7 +478,7 @@ def _kpi_html(items: list[dict[str, Any]]) -> str:
             f'<div class="v">{e(fmt_value(k.get("value"), k.get("format")))}</div>'
             f'<div class="d">{e(pct(k.get("pct_change")))} vs {e(k.get("baseline_period") or "prior")}'
             f"{' · YoY ' + e(pct(k.get('yoy_pct_change'))) if k.get('yoy_pct_change') is not None else ''}"
-            f"</div></div>"
+            f"</div>{_plan_line_html(k)}</div>"
         )
     return f'<div class="kpis">{"".join(cells)}</div>'
 
@@ -451,6 +491,15 @@ def blocks_to_md(title: str, blocks: list[dict[str, Any]]) -> str:
             out += [f"## {b.get('text')}", ""]
         elif t == "narrative":
             out += [b.get("markdown", ""), ""]
+            if bridge_rows(b.get("bridge")):
+                out += [table_md(["Bridge", "Amount"], bridge_rows(b.get("bridge"))), ""]
+        elif t == "bridge":
+            out += [
+                f"### {b.get('title') or 'Bridge'}",
+                "",
+                table_md(["Bridge", "Amount"], bridge_rows(b)),
+                "",
+            ]
         elif t == "methodology":
             out += ["## Methodology", "", b.get("markdown", ""), ""]
         elif t == "summary":
@@ -472,7 +521,7 @@ def blocks_to_md(title: str, blocks: list[dict[str, Any]]) -> str:
                 out += [f"## {b.get('title') or 'KPIs'}", ""]
             out += [
                 f"- **{k.get('label')}**: {fmt_value(k.get('value'), k.get('format'))} "
-                f"({pct(k.get('pct_change'))} vs {k.get('baseline_period') or 'prior'})"
+                f"({pct(k.get('pct_change'))} vs {k.get('baseline_period') or 'prior'}{_plan_suffix(k)})"
                 for k in items
             ]
             out.append("")

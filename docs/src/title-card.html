@@ -9,8 +9,10 @@
   and JetBrains Mono because they are the named families in the app's
   --font-sans and --font-mono stacks.
 
-  Every number in the tree is copied from the investigation tree block in
-  README.md, so the card claims nothing the README does not.
+  The subject is the flagship CEO investigation's plan-to-actual bridge. Every
+  number is copied from the bridge block in README.md ("What AnalystOS finds"),
+  which comes from a real run on the seed-42 demo, so the card claims nothing
+  the README does not. Bar geometry is linear in value: 128px = the $3.79M plan.
 -->
 <html lang="en">
 <head>
@@ -33,8 +35,7 @@
     --positive: #1f7a4d;
     --positive-soft: #e8f4ed;
     --negative: #b4372f;
-    --evidence-strong: #1f7a4d;
-    --evidence-moderate: #2f5fb3;
+    --negative-soft: #fbecea;
     --code-bg: #fafafa;
     --shadow-pop: 0 4px 16px rgb(0 0 0 / 0.08), 0 1px 3px rgb(0 0 0 / 0.06);
     --mono: 'JetBrains Mono', ui-monospace, monospace;
@@ -44,72 +45,53 @@
   body {
     font-family: 'Inter', ui-sans-serif, system-ui, sans-serif;
     color: var(--fg);
-    background: linear-gradient(90deg, var(--bg) 0%, var(--bg) 42%, var(--bg-subtle) 100%);
+    background: linear-gradient(90deg, var(--bg) 0%, var(--bg) 38%, var(--bg-subtle) 100%);
     display: flex; align-items: center;
   }
+  .num { font-variant-numeric: tabular-nums; }
 
-  .left { width: 560px; flex: 0 0 auto; padding: 0 28px 0 64px; }
-  .brand { display: flex; align-items: center; gap: 16px; margin-bottom: 26px; }
-  .brand svg { width: 52px; height: 52px; display: block; }
-  .brand .word { font-size: 44px; font-weight: 700; letter-spacing: -0.03em; line-height: 1; }
-  h1 { font-size: 32px; font-weight: 700; line-height: 1.16; letter-spacing: -0.022em; }
-  .sub { margin-top: 18px; font-size: 18px; line-height: 1.4; color: var(--fg-muted); }
+  .left { width: 470px; flex: 0 0 auto; padding: 0 24px 0 56px; }
+  .brand { display: flex; align-items: center; gap: 14px; margin-bottom: 24px; }
+  .brand svg { width: 48px; height: 48px; display: block; }
+  .brand .word { font-size: 40px; font-weight: 700; letter-spacing: -0.03em; line-height: 1; }
+  h1 { font-size: 28px; font-weight: 700; line-height: 1.18; letter-spacing: -0.022em; }
+  .sub { margin-top: 16px; font-size: 17px; line-height: 1.4; color: var(--fg-muted); }
 
   .panel {
-    flex: 1 1 auto; margin-right: 48px;
+    flex: 1 1 auto; margin-right: 40px;
     background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
     box-shadow: var(--shadow-pop); overflow: hidden;
   }
   .head {
     display: flex; align-items: center; justify-content: space-between; gap: 12px;
-    padding: 14px 18px; border-bottom: 1px solid var(--border);
+    padding: 13px 18px; border-bottom: 1px solid var(--border);
   }
-  .q { font-size: 16px; font-weight: 700; letter-spacing: -0.01em; }
+  .q { font-size: 14.5px; font-weight: 700; letter-spacing: -0.01em; line-height: 1.3; }
   .period {
-    font-size: 12px; font-weight: 500; color: var(--fg-muted);
+    font-size: 11.5px; font-weight: 500; color: var(--fg-muted);
     background: var(--bg-muted); border-radius: 4px; padding: 3px 8px; white-space: nowrap;
   }
   .label {
-    padding: 10px 18px 0; font-size: 10.5px; font-weight: 600; letter-spacing: 0.08em;
+    font-size: 10px; font-weight: 600; letter-spacing: 0.08em;
     color: var(--fg-subtle); text-transform: uppercase;
   }
+  .body { padding: 12px 18px 12px; display: flex; flex-direction: column; gap: 8px; }
 
-  .tree { padding: 8px 12px 14px; }
-  .node { display: flex; gap: 8px; padding: 7px 8px; border-radius: 4px; border-left: 2px solid transparent; }
-  .node .dot { width: 8px; height: 8px; border-radius: 2px; background: var(--accent); margin-top: 5px; flex: 0 0 auto; }
-  .node.root .dot { background: var(--fg-subtle); }
-  .node .body { flex: 1 1 auto; min-width: 0; }
-  .node .text { font-size: 13.5px; line-height: 1.3; font-weight: 500; }
-  .node.root .text { font-size: 14.5px; font-weight: 600; }
-  .meta { display: flex; align-items: center; gap: 8px; margin-top: 5px; font-size: 11.5px; }
-
-  .children { position: relative; margin-left: 20px; padding-left: 10px; }
-  .children::before {
-    content: ""; position: absolute; left: 0; top: 0; bottom: 14px; width: 1px; background: var(--border);
-  }
-  .children .node { position: relative; }
-  .children .node::before {
-    content: ""; position: absolute; left: -12px; top: 15px; width: 10px; height: 1px; background: var(--border);
-  }
-  .node.sel { background: var(--accent-soft); border-left-color: var(--accent); }
-
-  .badge {
-    display: inline-flex; align-items: center; gap: 5px;
-    font-size: 11px; font-weight: 500; border-radius: 3px; padding: 2px 6px; white-space: nowrap;
-  }
-  .badge.obs { color: var(--fg-muted); background: var(--bg-muted); }
-  .badge.strong { color: var(--evidence-strong); background: var(--positive-soft); }
-  .badge.expl { color: var(--accent-soft-fg); background: var(--accent-soft); border: 1px solid #d3def2; }
-  .node.sel .badge.expl { background: var(--bg); }
-  .bars { display: inline-flex; align-items: flex-end; gap: 1.5px; height: 9px; }
-  .bars i { display: block; width: 2.5px; background: var(--evidence-strong); border-radius: 0.5px; }
-  .bars i:nth-child(1) { height: 4px; } .bars i:nth-child(2) { height: 6.5px; } .bars i:nth-child(3) { height: 9px; }
-
-  .track { width: 64px; height: 4px; border-radius: 2px; background: var(--bg-muted); overflow: hidden; }
-  .track b { display: block; height: 100%; background: var(--accent); border-radius: 2px; }
-  .pct { color: var(--fg-muted); font-variant-numeric: tabular-nums; min-width: 26px; }
+  .top { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .badge { font-size: 11px; font-weight: 600; border-radius: 3px; padding: 2px 7px; white-space: nowrap; }
+  .badge.ok { color: var(--positive); background: var(--positive-soft); }
+  .gap { font-size: 13px; font-weight: 700; color: var(--negative); }
+  svg { display: block; width: 100%; height: auto; overflow: visible; }
+  svg .amt { font-family: 'Inter', sans-serif; font-size: 12px; font-weight: 700; text-anchor: middle; font-variant-numeric: tabular-nums; }
+  svg .ax { font-family: 'Inter', sans-serif; font-size: 11px; fill: var(--fg-muted); text-anchor: middle; }
+  svg .cause { font-family: 'Inter', sans-serif; font-size: 9.5px; font-weight: 600; fill: var(--accent-soft-fg); text-anchor: middle; }
+  svg .conn { stroke: var(--fg-subtle); stroke-dasharray: 3 3; stroke-width: 1; opacity: 0.6; }
+  svg .base { stroke: var(--border); stroke-width: 1; }
+  .foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding-top: 8px; border-top: 1px solid var(--border); }
+  .recon { font-size: 12px; font-weight: 600; color: var(--positive); }
+  .signal { font-size: 11px; color: var(--fg-subtle); }
   .sql {
-    margin-left: auto; font-family: var(--mono); font-size: 10.5px; font-weight: 500; color: var(--fg-subtle);
+    font-family: var(--mono); font-size: 10.5px; font-weight: 500; color: var(--fg-subtle);
     background: var(--code-bg); border: 1px solid var(--border); border-radius: 3px; padding: 1px 5px;
   }
 </style>
@@ -121,62 +103,67 @@
       <div class="word">AnalystOS</div>
     </div>
     <h1>An analytical investigation workspace for BI, data, operations and finance teams.</h1>
-    <p class="sub">Every number links back to the query that produced it.</p>
+    <p class="sub">Make the analyst's method executable: every number links back to the query that produced it.</p>
   </div>
 
   <div class="panel">
     <div class="head">
-      <div class="q">Why was August revenue down?</div>
-      <div class="period">August 2026 vs July 2026</div>
+      <div class="q">&ldquo;We made our sales number last quarter, but we missed our target for net profit. What happened?&rdquo;</div>
+      <div class="period">Q2 2026 vs plan</div>
     </div>
-    <div class="label">Investigation tree</div>
-    <div class="tree">
-      <div class="node root">
-        <span class="dot"></span>
-        <div class="body">
-          <div class="text">Revenue declined 11.8% ($11.37M to $10.02M)</div>
-          <div class="meta">
-            <span class="badge obs">Observation</span>
-            <span class="badge strong"><span class="bars"><i></i><i></i><i></i></span>Strong evidence</span>
-            <span class="sql">SQL</span>
-          </div>
-        </div>
+    <div class="body">
+      <div class="top">
+        <span class="label">Net profit, read as Operating Profit: plan to actual</span>
+        <span><span class="badge ok">Revenue on plan +0.4%</span> <span class="gap num">&minus;$1.86M (&minus;49.0%)</span></span>
       </div>
-      <div class="children">
-        <div class="node">
-          <span class="dot"></span>
-          <div class="body">
-            <div class="text">Orders declined 6.7%: explains 55% of the change</div>
-            <div class="meta">
-              <span class="track"><b style="width:55%"></b></span><span class="pct">55%</span>
-              <span class="badge expl">Supported explanation</span>
-              <span class="sql">SQL</span>
-            </div>
-          </div>
-        </div>
-        <div class="node">
-          <span class="dot"></span>
-          <div class="body">
-            <div class="text">AOV declined 5.5%: explains 45% of the change</div>
-            <div class="meta">
-              <span class="track"><b style="width:45%"></b></span><span class="pct">45%</span>
-              <span class="badge expl">Supported explanation</span>
-              <span class="sql">SQL</span>
-            </div>
-          </div>
-        </div>
-        <div class="node sel">
-          <span class="dot"></span>
-          <div class="body">
-            <div class="text">Branch = Dallas: Revenue -$662.0k (-26.7%), 49% of the change</div>
-            <div class="meta">
-              <span class="track"><b style="width:49%"></b></span><span class="pct">49%</span>
-              <span class="badge expl">Supported explanation</span>
-              <span class="sql">SQL</span>
-            </div>
-          </div>
-        </div>
+      <svg viewBox="0 0 624 208" aria-hidden="true">
+        <rect x="16.0" y="30.00" width="46" height="128.00" rx="2" fill="var(--fg-subtle)"/>
+        <text x="39.0" y="24.00" class="amt" fill="var(--fg)">$3.79M</text>
+        <text x="39.0" y="173" class="ax">Plan</text>
+        <line x1="62.0" x2="94.0" y1="30.00" y2="30.00" class="conn"/>
+        <rect x="94.0" y="30.00" width="46" height="29.91" rx="2" fill="var(--negative)"/>
+        <text x="117.0" y="24.00" class="amt" fill="var(--negative)">−$886K</text>
+        <text x="117.0" y="173" class="ax">Unit-cost</text>
+        <text x="117.0" y="186" class="ax">inflation</text>
+        <text x="117.0" y="200" class="cause">Gulf States</text>
+        <line x1="140.0" x2="172.0" y1="59.91" y2="59.91" class="conn"/>
+        <rect x="172.0" y="59.91" width="46" height="21.02" rx="2" fill="var(--negative)"/>
+        <text x="195.0" y="53.91" class="amt" fill="var(--negative)">−$622K</text>
+        <text x="195.0" y="173" class="ax">Discounting</text>
+        <text x="195.0" y="200" class="cause">Contractor</text>
+        <line x1="218.0" x2="250.0" y1="80.92" y2="80.92" class="conn"/>
+        <rect x="250.0" y="74.70" width="46" height="6.23" rx="2" fill="var(--positive)"/>
+        <text x="273.0" y="68.70" class="amt" fill="var(--positive)">+$184K</text>
+        <text x="273.0" y="173" class="ax">Volume</text>
+        <text x="273.0" y="186" class="ax">and mix</text>
+        <line x1="296.0" x2="328.0" y1="74.70" y2="74.70" class="conn"/>
+        <rect x="328.0" y="74.70" width="46" height="11.35" rx="2" fill="var(--negative)"/>
+        <text x="351.0" y="68.70" class="amt" fill="var(--negative)">−$336K</text>
+        <text x="351.0" y="173" class="ax">Freight</text>
+        <text x="351.0" y="186" class="ax">overrun</text>
+        <text x="351.0" y="200" class="cause">surcharge</text>
+        <line x1="374.0" x2="406.0" y1="86.05" y2="86.05" class="conn"/>
+        <rect x="406.0" y="86.05" width="46" height="6.63" rx="2" fill="var(--negative)"/>
+        <text x="429.0" y="80.05" class="amt" fill="var(--negative)">−$196K</text>
+        <text x="429.0" y="173" class="ax">Labor</text>
+        <text x="429.0" y="186" class="ax">overrun</text>
+        <text x="429.0" y="200" class="cause">overtime</text>
+        <line x1="452.0" x2="484.0" y1="92.68" y2="92.68" class="conn"/>
+        <rect x="484.0" y="92.68" width="46" height="1.50" rx="2" fill="var(--negative)"/>
+        <text x="507.0" y="86.68" class="amt" fill="var(--negative)">−$1,503</text>
+        <text x="507.0" y="173" class="ax">Other</text>
+        <text x="507.0" y="186" class="ax">lines, net</text>
+        <line x1="530.0" x2="562.0" y1="92.73" y2="92.73" class="conn"/>
+        <rect x="562.0" y="92.73" width="46" height="65.27" rx="2" fill="var(--accent)"/>
+        <text x="585.0" y="86.73" class="amt" fill="var(--fg)">$1.93M</text>
+        <text x="585.0" y="173" class="ax">Actual</text>
+        <line x1="0" x2="624" y1="158" y2="158" class="base"/>
+      </svg>
+      <div class="foot">
+        <div class="recon num">&#10003; Every bar is a reconciled node, traced to its cause; residual $0.00</div>
+        <span class="sql">SQL</span>
       </div>
+      <div class="signal">Related signal (Gulf Coast lead conversion 30.0% to 5.5%): relationship to the miss not established</div>
     </div>
   </div>
 </body>

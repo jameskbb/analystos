@@ -765,9 +765,10 @@ class _Compiler:
                 ),
             )
             g.atoms.append(a)
-            if a.agg == "avg":
+            if a.agg in ("avg", "median"):
+                what = "an average" if a.agg == "avg" else "a median"
                 self.warnings.append(
-                    f"{a.id} is an average of {a.entity} rows; it is not additive across segments"
+                    f"{a.id} is {what} of {a.entity} rows; it is not additive across segments"
                 )
         ctes: list[tuple[str, _Group]] = []
         cte_sql: list[str] = []

@@ -76,8 +76,10 @@ from .models import (
     FilterSpec,
     InvestigationTree,
     NodeKind,
+    PlanBridge,
     PlanContext,
     PlanStep,
+    RelatedSignal,
     ResultSnapshot,
     Segment,
     TreeNode,
@@ -86,7 +88,7 @@ from .models import (
 )
 from .planner import driver_edges, pinned_dimensions
 from .semantic_graph import dimensions_for_metric, time_dimension_for_metric
-from .templates import TEMPLATES, dimension_roles
+from .templates import TEMPLATES, dimension_roles, metric_matches_role
 
 IDENTITY_GAP_LIMIT = 0.05
 """A driver identity that misses the parent by more than 5% in either period is not used."""
@@ -116,6 +118,8 @@ class ExecutionResult:
     failures: list[str]
     query_count: int
     notes: list[str] = field(default_factory=list)
+    related_signals: list[RelatedSignal] = field(default_factory=list)
+    bridge: PlanBridge | None = None
 
 
 @dataclass
@@ -207,6 +211,10 @@ class _Executor:
         self._versions: dict[str, DatasetVersionRef] = {}
         self.root_id: str | None = None
         self.drill_candidates: list[str] = []
+        self.root_sign: dict[str, int] = {}
+        """Sign that turns a node's own variance into its effect on the root (costs: -1)."""
+        self.related: list[RelatedSignal] = []
+        self.bridge: PlanBridge | None = None
         tpl_id = plan.template_id or "general_change"
         self.template = TEMPLATES.get(tpl_id, TEMPLATES["general_change"])
 
@@ -236,14 +244,22 @@ class _Executor:
                 f"{self.dim_label(sc.dimension)} = {sc.baseline}, {self.ctx.window.display()}",
                 [self._segment_filter(sc.baseline)],
             )
-        if (
-            self.ctx.comparison_kind in ("budget", "forecast")
-            and self.ctx.baseline_metric_id
-            and metric_id == self.ctx.metric_id
-        ):
-            bm = self.model.get_metric(self.ctx.baseline_metric_id)
+        plan = self.plan_of(metric_id)
+        if plan is not None:
+            bm = self.model.get_metric(plan)
             return _Side(bm.id, self.ctx.window, f"{bm.display_name}, {self.ctx.window.display()}")
         return _Side(metric_id, self.ctx.baseline, self.ctx.baseline.display())
+
+    def plan_of(self, metric_id: str) -> str | None:
+        """The plan metric ``metric_id`` is compared with, in a comparison against plan."""
+        if self.ctx.comparison_kind not in ("budget", "forecast") or not self.ctx.baseline_metric_id:
+            return None
+        if metric_id == self.ctx.metric_id:
+            return self.ctx.baseline_metric_id
+        return self.ctx.plan_metrics.get(metric_id)
+
+    def change_noun(self, metric_id: str) -> str:
+        return "gap to plan" if self.plan_of(metric_id) is not None else "change"
 
     def period_baseline(self) -> TimeWindow:
         """Baseline period for related checks. Against a budget or forecast the analysis
@@ -616,6 +632,19 @@ class _Executor:
     def metric_label(self, metric_id: str) -> str:
         return self.model.get_metric(metric_id).display_name
 
+    def unit_label(self, metric_id: str) -> str:
+        """A metric's name for prose next to values that carry its unit ("4.2 hours"): a label
+        that repeats the unit ("Median First Response (hours)") drops the repetition."""
+        m = self.model.get_metric(metric_id)
+        name = m.display_name
+        if m.unit and name.endswith(f"({m.unit})"):
+            return name[: -len(f"({m.unit})")].rstrip()
+        return name
+
+    def seg_text(self, seg: Segment) -> str:
+        """ "Region = Gulf Coast" with the dimension's label."""
+        return f"{self.dim_label(seg.dimension)} = {self._seg_label(seg.value)}"
+
     def dim_label(self, dim: str) -> str:
         base = dim.split("__")[0]
         if self.model.has_dimension(base):
@@ -716,26 +745,43 @@ class _Executor:
             self.root_id = root.id
         if root.status == "failed":
             return self.finish()
+        late = [s for s in steps if s.kind in ("reconcile", "related_signals")]
         for step in steps:
-            if step is root_step:
+            if step is root_step or step in late:
                 continue
-            try:
-                self.run_step(step)
-            except _BudgetExceeded as exc:
-                self.failed_node(self.root_id, step, step.title, str(exc))
-            except Exception as exc:  # a broken step must not take the investigation down
-                self.failed_node(self.root_id, step, step.title, f"{type(exc).__name__}: {exc}")
+            self._guarded(step)
         if self.cfg.drill_depth > 0:
             groups = [self.nodes[g] for g in self.drill_candidates]
             for g in self.top_groups(groups, self.cfg.drill_groups):
                 self.drill_group(g, 1)
+        for step in late:  # after the tree and its drills exist
+            self._guarded(step)
         self.add_untestable()
         return self.finish()
 
+    def _guarded(self, step: PlanStep) -> None:
+        try:
+            self.run_step(step)
+        except _BudgetExceeded as exc:
+            self.failed_node(self.root_id, step, step.title, str(exc))
+        except Exception as exc:  # a broken step must not take the investigation down
+            self.failed_node(self.root_id, step, step.title, f"{type(exc).__name__}: {exc}")
+
     def run_step(self, step: PlanStep) -> None:
         assert self.root_id is not None
-        if step.kind == "decompose" and step.params.get("method") == "margin_bridge":
-            self.margin_bridge(step)
+        if step.kind == "decompose" and step.params.get("method") == "plan_variance":
+            self.plan_variance(step)
+        elif step.kind == "decompose" and step.params.get("method") == "margin_bridge":
+            if step.params.get("mode") == "plan":
+                self.plan_bridge(step)
+            else:
+                self.margin_bridge(step)
+        elif step.kind == "contribution" and step.params.get("role") == "variance_drill":
+            self.variance_drill(step)
+        elif step.kind == "reconcile":
+            self.reconcile(step)
+        elif step.kind == "related_signals":
+            self.related_signals(step)
         elif step.kind == "decompose":
             mid = step.params.get("metric_id", self.ctx.metric_id)
             parent = self.find_metric_node(mid) or self.nodes[self.root_id]
@@ -833,13 +879,20 @@ class _Executor:
             metric_ids=[mid],
         )
         ftxt = ("; filters: " + ", ".join(f.describe() for f in self.ctx.filters)) if self.ctx.filters else ""
+        title = None
+        method = None
         if budget:
-            rel = "below" if change < 0 else "above"
+            word = self.plan_word()
+            verb = "missed" if self._adverse(mid, change) else "beat"
+            if abs(change) < 1e-9:
+                verb = "matched"
             statement = (
-                f"{m.display_name} was {fmt_abs_pct(pct)} {rel} "
-                f"{self.metric_label(base_side.metric_id)} in {self.ctx.window.display()} "
-                f"({fmt_value(cur, m.format)} vs {fmt_value(base, m.format)}, {fmt_change(change, m.format)}){ftxt}"
+                f"{m.display_name} {verb} {word} by {fmt_value(abs(change), m.format)} ({fmt_abs_pct(pct)}) in "
+                f"{self.ctx.window.display()}: {fmt_value(cur, m.format)} against a {word} of "
+                f"{fmt_value(base, m.format)}{ftxt}."
             )
+            method = f"Compared with {self.metric_label(base_side.metric_id)} ({base_side.metric_id}) over the same period."
+            title = f"{m.display_name} {verb} {word}"
         elif m.format == "percent":
             statement = (
                 f"{m.display_name} {direction_word(change)} {fmt_change(abs(change), m.format)[1:]} "
@@ -883,6 +936,9 @@ class _Executor:
             evidence_strength="strong",
             artifact_ids=[art.id, *ids],
             step_id=step.id,
+            title=title,
+            method=method,
+            baseline_label="Plan" if budget else base_side.label,
         )
         self.add_node(node, EvidenceInput(executed=True, measurement_only=True))
         self.root_id = node.id
@@ -1121,7 +1177,7 @@ class _Executor:
         direction: str = "increase",
     ) -> TreeNode | None:
         m = self.model.get_metric(metric_id)
-        title = f"{m.display_name} change by {self.dim_label(dim)}"
+        title = f"{m.display_name} {self.change_noun(metric_id)} by {self.dim_label(dim)}"
         ids: list[str] = []
         if parent.metric_id == metric_id:
             total_cur, total_base = parent.current, parent.baseline
@@ -1264,12 +1320,16 @@ class _Executor:
             )
         elif topseg is not None and topseg.share is not None:
             verb = "explains" if topseg.share >= 0 else "offsets"
-            top_text = f"; largest: {self._seg_label(topseg.value)} ({verb} {fmt_share(abs(topseg.share))} of the change)"
+            top_text = (
+                f"; largest: {self._seg_label(topseg.value)} ({verb} {fmt_share(abs(topseg.share))} of the "
+                f"{self.change_noun(metric_id)})"
+            )
         group = TreeNode(
             id=stable_id("node", "dim", parent.id, metric_id, dim),
             parent_id=parent.id,
             kind="dimension",
-            statement=f"{m.display_name} change by {self.dim_label(dim)}: {len(outcome.rows)} segments{top_text}",
+            title=title,
+            statement=f"{title}: {len(outcome.rows)} segments{top_text}",
             statement_type="observation",
             metric_id=metric_id,
             metric_label=m.display_name,
@@ -1292,13 +1352,21 @@ class _Executor:
         if rest:
             eff = sum(r.effect for r in rest)
             share = sum(r.share for r in rest if r.share is not None) if exact else None
+            sign = self.root_sign.get(parent.id)
             other = TreeNode(
                 id=stable_id("node", "other", group.id),
                 parent_id=group.id,
                 kind="other",
+                title=f"{len(rest)} other segment{'s' if len(rest) > 1 else ''}",
+                root_effect=None if sign is None or exact is False else sign * eff + 0.0,
                 statement=(
-                    f"{len(rest)} other {self.dim_label(dim)} segments: {fmt_change(eff, m.format)}"
-                    + (f"; {fmt_share(share)} of the change combined" if share is not None else "")
+                    f"{len(rest)} other {self.dim_label(dim)} segment{'s' if len(rest) > 1 else ''}: "
+                    f"{fmt_change(eff, m.format)}"
+                    + (
+                        f"; {fmt_share(share)} of the {self.change_noun(metric_id)} combined"
+                        if share is not None
+                        else ""
+                    )
                 ),
                 statement_type=statement_type_for(executed=True, attribution=share is not None, exact=exact),
                 metric_id=metric_id,
@@ -1352,14 +1420,15 @@ class _Executor:
                 f"{share_txt}"
             )
         elif exact:
+            noun = self.change_noun(m.id)
             if row.share is None:
                 share_txt = ""
             elif abs(row.share) < 0.005:
-                share_txt = "; no share of the change"
+                share_txt = f"; no share of the {noun}"
             elif row.share >= 0:
-                share_txt = f"; accounts for {fmt_share(row.share)} of the change"
+                share_txt = f"; accounts for {fmt_share(row.share)} of the {noun}"
             else:
-                share_txt = f"; offsets {fmt_share(abs(row.share))} of the change"
+                share_txt = f"; offsets {fmt_share(abs(row.share))} of the {noun}"
             pct_txt = (
                 fmt_pct(pct)
                 if pct is not None
@@ -1378,6 +1447,8 @@ class _Executor:
             id=stable_id("node", "seg", group.id, row.value),
             parent_id=group.id,
             kind="segment",
+            title=self._seg_label(row.value),
+            baseline_label="Plan" if self.plan_of(m.id) is not None else None,
             statement=statement,
             statement_type=statement_type_for(executed=True, attribution=row.share is not None, exact=exact),
             metric_id=m.id,
@@ -1396,6 +1467,11 @@ class _Executor:
                 method=outcome.method,  # type: ignore[arg-type]
                 mix_effect=row.mix_effect,
                 rate_effect=row.rate_effect,
+            ),
+            root_effect=(
+                self.root_sign[group.parent_id] * row.effect + 0.0
+                if exact and group.parent_id in self.root_sign and outcome.method == "additive"
+                else None
             ),
             evidence_strength="moderate",
             artifact_ids=[art_id, *ids],
@@ -1424,7 +1500,9 @@ class _Executor:
         contrib_dims = [
             s.params["dimension"]
             for s in self.plan.enabled_steps()
-            if s.kind == "contribution" and s.params.get("metric_id") == self.ctx.metric_id
+            if s.kind == "contribution"
+            and s.params.get("metric_id") == self.ctx.metric_id
+            and "dimension" in s.params
         ]
         usable, _ = dimensions_for_metric(self.model, self.ctx.metric_id)
         usable_names = [d.name for d in usable]
@@ -2110,10 +2188,83 @@ class _Executor:
                 ),
             )
 
+    # ------------------------------------------------------------------ variance to plan
+    def _adverse(self, metric_id: str, variance: float) -> bool:
+        m = self.model.get_metric(metric_id)
+        return variance < 0 if m.higher_is_better else variance > 0
+
+    def gap_noun(self, metric_id: str, variance: float, *, root: bool = False) -> str:
+        """ "miss" / "beat" for the root; "shortfall" / "overrun" / "saving" for its parts."""
+        m = self.model.get_metric(metric_id)
+        if root:
+            return "miss" if self._adverse(metric_id, variance) else "beat"
+        if m.higher_is_better:
+            return "shortfall" if variance < 0 else "excess over plan"
+        return "overrun" if variance > 0 else "saving"
+
+    def variance_title(self, metric_id: str, actual: float, plan: float) -> str:
+        """A noun phrase a sentence can use: "Gross Margin shortfall", "Freight Cost overrun"."""
+        m = self.model.get_metric(metric_id)
+        name = m.display_name
+        var = actual - plan
+        if abs(var) <= 0.005 * max(abs(plan), 1e-9):
+            return f"{name} on plan"
+        if m.higher_is_better:
+            return f"{name} {'shortfall' if var < 0 else 'ahead of plan'}"
+        return f"{name} {'overrun' if var > 0 else 'saving'}"
+
+    def plan_word(self) -> str:
+        bm = self.model.get_metric(self.ctx.baseline_metric_id or self.ctx.metric_id)
+        for word in ("budget", "forecast", "target"):
+            if metric_matches_role(bm, word):
+                return word
+        return "plan"
+
+    # ------------------------------------------------------------------ reconciliation
+
+    # ------------------------------------------------------------------ related signals
+
+    def _measure_in(
+        self, metric_id: str, path: list[Segment], window: TimeWindow, base: TimeWindow
+    ) -> tuple[float | None, float | None, list[str]]:
+        filters = self.filters_for(path)
+        where = ", ".join(s.label() for s in path)
+        label = self.metric_label(metric_id)
+        c = self.metric_query(
+            [metric_id], window, filters=filters, title=f"{label} [{where}], {window.display()}"
+        )
+        b = self.metric_query(
+            [metric_id], base, filters=filters, title=f"{label} [{where}], {base.display()}"
+        )
+        ids = [c.artifact.id, b.artifact.id]
+        if not c.ok or not b.ok:
+            return None, None, ids
+        return _to_float(c.rows[0].get(metric_id)), _to_float(b.rows[0].get(metric_id)), ids
+
+    def _signals(self) -> list[RelatedSignal]:
+        out = []
+        for s in self.related:
+            n = self.nodes.get(s.node_id)
+            if n is None:
+                continue
+            out.append(
+                s.model_copy(
+                    update={
+                        "evidence_strength": n.evidence_strength,
+                        "provisional": any(x.startswith("provisional: ") for x in n.notes),
+                        "supporting_node_ids": [i for i in s.supporting_node_ids if i in self.nodes],
+                    }
+                )
+            )
+        return out
+
     # ------------------------------------------------------------------ premise
     def premise(self, step: PlanStep) -> None:
         """Measure a premise of the question ("revenue was roughly flat") over the analysis periods."""
         assert self.root_id is not None
+        if step.params.get("baseline_metric_id"):
+            self.plan_premise(step)
+            return
         mid = step.params["metric_id"]
         m = self.model.get_metric(mid)
         cur, base, ids, err = self.totals(mid, [], compare_side=False)
@@ -2174,7 +2325,11 @@ class _Executor:
             evidence_strength="strong",
             artifact_ids=[art.id, *ids],
             step_id=step.id,
-            notes=[f"premise {'holds' if holds else 'contradicted'}"],
+            notes=[f"premise {'holds' if holds else 'contradicted'}", f"tolerance {tol * 100:.1f}%"],
+            role="premise",
+            verdict="supported" if holds else "contradicted",
+            title=f"Premise {'supported' if holds else 'contradicted'}: {m.display_name} {change_phrase(change, pct)}",
+            baseline_label=pb.display(),
         )
         if expectation != "flat":
             node.statement = node.statement.replace(f"flat means {crit}", f"'{expectation}' means {crit}")
@@ -2604,6 +2759,25 @@ class _Executor:
             )
             self.add_node(node, EvidenceInput(executed=False))
 
+    # ------------------------------------------------------------------ plan steps (see variance.py)
+    def plan_variance(self, step: PlanStep) -> None:
+        raise NotImplementedError
+
+    def plan_bridge(self, step: PlanStep) -> None:
+        raise NotImplementedError
+
+    def variance_drill(self, step: PlanStep) -> None:
+        raise NotImplementedError
+
+    def reconcile(self, step: PlanStep) -> None:
+        raise NotImplementedError
+
+    def related_signals(self, step: PlanStep) -> None:
+        raise NotImplementedError
+
+    def plan_premise(self, step: PlanStep) -> None:
+        raise NotImplementedError
+
     # ------------------------------------------------------------------ finish
     def corroborate(self) -> None:
         by_key: dict[tuple[str, str | None, str], list[TreeNode]] = {}
@@ -2694,6 +2868,7 @@ class _Executor:
             ):
                 n.statement_type = "observation"
         # rank children: drivers, dimension groups (by explanatory power), checks, failures, hypotheses
+        role_order = {"premise": 0, "reconciliation": 1, None: 2, "related_signal": 3}
         kind_order: dict[NodeKind, int] = {
             "driver": 0,
             "other": 1,
@@ -2714,10 +2889,16 @@ class _Executor:
                     return abs(c.contribution_to_parent.share)
                 return 0.0
 
-            def sort_key(cid: str) -> tuple[int, float, int, str]:
+            def sort_key(cid: str) -> tuple[int, int, float, int, str]:
                 c = self.nodes[cid]
                 other_last = 1 if c.kind == "other" else 0
-                return (kind_order.get(c.kind, 8), -power(cid), other_last, c.statement)
+                return (
+                    kind_order.get(c.kind, 8),
+                    role_order.get(c.role, 2),
+                    -power(cid),
+                    other_last,
+                    c.statement,
+                )
 
             if n.kind != "dimension":
                 n.children.sort(key=sort_key)
@@ -2728,13 +2909,26 @@ class _Executor:
         # stable node order: depth-first from root
         tree.nodes = tree.walk() + [n for n in tree.nodes if n.id not in {w.id for w in tree.walk()}]
         return ExecutionResult(
-            tree, list(self.artifacts.values()), self.failures, self.query_count, self.notes
+            tree,
+            list(self.artifacts.values()),
+            self.failures,
+            self.query_count,
+            self.notes,
+            self._signals(),
+            self.bridge,
         )
+
+
+def make_executor(plan: AnalysisPlan, store: Any, model: SemanticModel) -> _Executor:
+    """The executor with every step kind (plan-variance steps live in :mod:`.variance`)."""
+    from .variance import Executor
+
+    return Executor(plan, store, model)
 
 
 def execute(plan: AnalysisPlan, store: Any, model: SemanticModel) -> ExecutionResult:
     """Execute ``plan`` and return the tree, artifacts, failures and query count."""
-    return _Executor(plan, store, model).run()
+    return make_executor(plan, store, model).run()
 
 
 def run(plan: AnalysisPlan, store: Any, model: SemanticModel) -> tuple[InvestigationTree, list[Artifact]]:
@@ -2754,7 +2948,7 @@ def extend_with_contribution(
 ) -> tuple[InvestigationTree, list[Artifact], list[str]]:
     """Branch from an existing node: contribution of the node's metric by ``dimension``
     within the node's segment path (spec §17 "branch"). Returns the extended tree."""
-    ex = _Executor(plan, store, model)
+    ex = make_executor(plan, store, model)
     for n in tree.nodes:
         ex.nodes[n.id] = n.model_copy(deep=True)
         ex.order.append(n.id)

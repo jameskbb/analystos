@@ -49,3 +49,12 @@ rules:
   - {name: cancelled_orders_have_cancelled_lines, table: order_lines, column: null, kind: custom_sql, severity: error,
      params: {sql: "SELECT l.* FROM order_lines l JOIN orders o ON o.order_id = l.order_id WHERE o.status = 'cancelled' AND l.line_status <> 'cancelled'"},
      description: Lines of cancelled orders carry line_status cancelled (the SQL returns failing rows).}
+  - {name: sales_plan_category_fk, table: sales_plan, column: category, kind: fk_exists, severity: error,
+     params: {ref_table: product_categories, ref_column: category},
+     description: Every plan row uses a governed product category.}
+  - {name: sales_plan_revenue_identity, table: sales_plan, column: null, kind: custom_sql, severity: error,
+     params: {sql: "SELECT * FROM sales_plan WHERE abs(plan_revenue - (plan_gross_revenue - plan_discount_amount)) > 0.011"},
+     description: Plan revenue is plan list revenue less plan discounts on every row (the SQL returns failing rows).}
+  - {name: products_supplier_fk, table: products, column: supplier_id, kind: fk_exists, severity: error,
+     params: {ref_table: suppliers, ref_column: supplier_id},
+     description: Every product references the supplier master (the free-text supplier column stays messy).}

@@ -99,6 +99,27 @@ export function latestFullMonth(today: Date): string {
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
 }
 
+/** The latest complete calendar quarter before `today`, as the API's period expression ("Q2 2026"). */
+export function latestFullQuarter(today: Date): string {
+  return recentQuarters(today, 1)[0];
+}
+
+/** The last `n` complete calendar quarters before `today`, newest first ("Q2 2026", "Q1 2026", ...). */
+export function recentQuarters(today: Date, n = 6): string[] {
+  let q = Math.floor(today.getUTCMonth() / 3); // current quarter index 0-3; step back one to the last closed quarter
+  let y = today.getUTCFullYear();
+  const out: string[] = [];
+  for (let i = 0; i < n; i++) {
+    q -= 1;
+    if (q < 0) {
+      q = 3;
+      y -= 1;
+    }
+    out.push(`Q${q + 1} ${y}`);
+  }
+  return out;
+}
+
 export function monthLabel(period: string | null | undefined): string {
   if (!period || !/^\d{4}-\d{2}$/.test(period)) return period ?? "";
   const [y, m] = period.split("-").map(Number);

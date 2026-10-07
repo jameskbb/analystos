@@ -1,3 +1,6 @@
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { expect, test, type Page } from "@playwright/test";
 
 /**
@@ -7,9 +10,29 @@ import { expect, test, type Page } from "@playwright/test";
  * change into unit cost and discounting effects, investigate product/customer/region mix, and keep
  * hypotheses visibly separate from supported explanations.
  *
- * Expected magnitudes come from the demo's answer key (packages/demo-data scenarios.json):
- * cost about -4.2 pp and discounting about -1.6 pp of Gross Margin %, Q2 2026 vs Q2 2025.
+ * Expected magnitudes come from the demo's answer key (scenarios.json, written by `make demo`):
+ * the Gross Margin % decline and its unit cost and discounting effects, Q2 2026 vs Q2 2025.
  */
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+// The repository's demo cache (`make demo`), else the copy the E2E API generated when it loaded the demo.
+const SCENARIO_PATHS = [
+  resolve(HERE, "../../../data/demo/summit-supply-seed42/scenarios.json"),
+  resolve(HERE, "../.servers/data/demo/summit-supply-seed42/scenarios.json"),
+];
+type MarginKey = { headline: { gross_margin_pct_change_pp: number }; attribution_pp: { unit_cost_inflation: number; discounting: number } };
+function marginKey(): MarginKey {
+  const path = SCENARIO_PATHS.find((p) => existsSync(p));
+  if (!path) throw new Error(`no demo answer key at ${SCENARIO_PATHS.join(" or ")}; run make demo`);
+  return (JSON.parse(readFileSync(path, "utf8")) as { stories: { margin_compression_q2_2026: MarginKey } }).stories.margin_compression_q2_2026;
+}
+/**
+ * A pp magnitude as the tree prints it (one decimal), as a RegExp alternation that accepts the answer
+ * key's value within 0.1 pp: the engine's counterfactual and the answer key's are computed separately
+ * and can land either side of a rounding boundary.
+ */
+const pp = (v: number) =>
+  `(?:${[-0.1, 0, 0.1].map((d) => (Math.round(Math.abs(v) * 10) / 10 + d).toFixed(1).replace(".", "\\.")).join("|")})`;
 
 const QUESTION = "Revenue was roughly flat. Why did margin decline?";
 
@@ -57,10 +80,11 @@ test("acceptance flow 2: revenue was roughly flat, why did margin decline", asyn
   });
 
   await test.step("the tree decomposes Gross Margin % into unit cost and discounting", async () => {
-    await expect(treeItem(page, /Gross Margin % declined 4\.8 pp/)).toBeVisible({ timeout: 240_000 });
+    const KEY = marginKey();
+    await expect(treeItem(page, new RegExp(`Gross Margin % declined ${pp(KEY.headline.gross_margin_pct_change_pp)} pp`))).toBeVisible({ timeout: 240_000 });
     await expect(treeItem(page, /Premise check \('revenue was roughly flat'\).*premise holds/)).toBeVisible();
-    await expect(treeItem(page, /Unit cost changes lowered Gross Margin % by 4\.2 pp/)).toBeVisible();
-    await expect(treeItem(page, /Discounting lowered Gross Margin % by 1\.6 pp/)).toBeVisible();
+    await expect(treeItem(page, new RegExp(`Unit cost changes lowered Gross Margin % by ${pp(KEY.attribution_pp.unit_cost_inflation)} pp`))).toBeVisible();
+    await expect(treeItem(page, new RegExp(`Discounting lowered Gross Margin % by ${pp(KEY.attribution_pp.discounting)} pp`))).toBeVisible();
     // No circular "Gross Margin explains Gross Margin %" driver.
     await expect(page.getByRole("treeitem", { name: /Gross Margin explains/ })).toHaveCount(0);
   });

@@ -38,7 +38,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { BlockEditor, BlockView } from "@/components/outputs/report-blocks";
+import { BlockEditor, BlockView, readingBlocks } from "@/components/outputs/report-blocks";
 import { ReviewPanel } from "@/components/outputs/review-panel";
 import { BLOCK_LABELS, editBlock, monthLabel, moveBlock, newBlock, publishRefusal, reviewState, type PublishRefusal } from "@/components/outputs/model";
 import { formatDateTime, formatRelative, humanize } from "@/lib/format";
@@ -143,7 +143,10 @@ function BlockCard({
 }
 
 function ReadingView({ report, blocks }: { report: ReportOut; blocks: ReportBlockSpec[] }) {
-  const visible = blocks.filter((b) => !b.excluded);
+  const visible = readingBlocks(
+    blocks.filter((b) => !b.excluded),
+    report.title,
+  );
   return (
     <article className="mx-auto flex max-w-3xl flex-col gap-5 rounded-md border border-border bg-bg px-6 py-6 print:max-w-none print:border-0 print:p-0" aria-label={report.title}>
       <header className="border-b border-border pb-3">

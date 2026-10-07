@@ -33,6 +33,7 @@ BLOCK_TYPES = {
     "finding",
     "kpi",
     "kpi_overview",
+    "bridge",
     "chart",
     "table",
     "methodology",
@@ -80,7 +81,10 @@ class ExecSummaryRequest(BaseModel):
 
 
 class BusinessReviewRequest(BaseModel):
-    period: str = Field(description="Month such as '2026-08' or 'August 2026' (any calendar expression)")
+    period: str = Field(
+        description="Month such as '2026-08' or 'August 2026', or a quarter such as 'Q2 2026' "
+        "(any calendar expression)"
+    )
     title: str | None = None
 
 

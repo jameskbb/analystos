@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AnalysisPlan } from "@/lib/api/types";
-import { addStep, moveStep, planProblems, removeStep, toggleStep, updateStep } from "./plan";
+import { addStep, moveStep, planProblems, premiseExpectation, removeStep, resolvedTerms, stepKindLabel, toggleStep, updateStep } from "./plan";
 
 const plan: AnalysisPlan = {
   requires_approval: true,
@@ -34,5 +34,47 @@ describe("plan editing", () => {
     const withSql = addStep(plan, "custom_sql");
     expect(planProblems(withSql)[0]).toMatch(/needs SQL/);
     expect(planProblems(addStep(plan, "contribution"))[0]).toMatch(/needs a dimension/);
+  });
+});
+
+describe("premise and step wording", () => {
+  it("says how each premise will be checked", () => {
+    expect(premiseExpectation({ text: "revenue was roughly flat", term: "revenue", metric_id: "revenue", expectation: "flat", tolerance: 0.02 })).toBe(
+      "Revenue within ±2%",
+    );
+    expect(
+      premiseExpectation({ text: "we made our sales number", term: "revenue", metric_id: "revenue", expectation: "meets_plan", tolerance: 0.01, baseline_metric_id: "revenue_target" }),
+    ).toBe("Revenue against Revenue Target, at most 1% short");
+  });
+
+  it("labels engine-planned steps", () => {
+    expect(stepKindLabel("decompose")).toBe("Decompose");
+    expect(stepKindLabel("reconcile")).toBe("Reconcile");
+    expect(stepKindLabel("related_signals")).toBe("Related signals");
+    expect(stepKindLabel("something_new")).toBe("Something New");
+  });
+});
+
+describe("resolved terms", () => {
+  it("lists words mapped through the glossary with the governed definition", () => {
+    const interp = {
+      metric_ids: ["operating_profit"],
+      ambiguous: [],
+      filters: [],
+      intent: "why_change",
+      resolved_terms: { "net profit": "operating_profit", revenue: "revenue" },
+      confidence_notes: ["'net profit' resolved to 'operating_profit' (glossary term 'Net Profit')"],
+    };
+    const glossary = [{ id: "g1", term: "Net Profit", definition: "Operating Profit: interest and tax sit at corporate.", metric_id: "operating_profit" }];
+    expect(resolvedTerms(interp, glossary)).toEqual([
+      {
+        phrase: "net profit",
+        metricId: "operating_profit",
+        via: "glossary term 'Net Profit'",
+        glossaryTerm: "Net Profit",
+        definition: "Operating Profit: interest and tax sit at corporate.",
+      },
+    ]);
+    expect(resolvedTerms(null)).toEqual([]);
   });
 });

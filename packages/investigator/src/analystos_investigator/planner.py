@@ -35,6 +35,10 @@ from .templates import (
     rank_dimensions,
 )
 
+VARIANCE_DEPTH = 4
+"""Levels of additive identities a gap to plan decomposes through (profit -> expenses -> labor ->
+overtime); nesting stops earlier wherever a node has no identity with plan counterparts."""
+
 
 class PlanningError(ValueError):
     """The interpretation cannot be planned (no metric, unresolved ambiguity, no period)."""
@@ -75,33 +79,59 @@ def pinned_dimensions(model: SemanticModel, metric_id: str) -> set[str]:
     return out
 
 
-def _finest_dimension(model: SemanticModel, dims: list[Any], role: str) -> Any | None:
-    """The most granular dimension of a role: the entity key itself, else sku/product/item."""
-    cands = [d for d in dims if role in dimension_roles(d)]
+def _finest_dimension(
+    model: SemanticModel, dims: list[Any], role: str, from_entity: str | None = None
+) -> Any | None:
+    """The most granular dimension of a role: on the entity nearest the metric (a product, not its
+    conformed category), preferring the entity key itself, else sku/product/item."""
+    cands = [d for d in dims if role in dimension_roles(d) and "status" not in dimension_roles(d)]
     if not cands:
         return None
+    hops = _entity_hops(model, from_entity) if from_entity else {}
 
-    def key(d: Any) -> tuple[int, str]:
+    def key(d: Any) -> tuple[int, int, str]:
         ent = model.get_entity(d.entity)
+        near = hops.get(d.entity, 99)
         if d.expr.strip() in ent.key_columns and len(ent.key_columns) == 1:
-            return (0, d.name)
+            return (near, 0, d.name)
         words = f"{d.name} {d.label or ''}".lower()
         for i, w in enumerate(("sku", "product", "item")):
             if w in words:
-                return (1 + i, d.name)
-        return (9, d.name)
+                return (near, 1 + i, d.name)
+        return (near, 9, d.name)
 
     return sorted(cands, key=key)[0]
 
 
-def margin_bridge(model: SemanticModel, metric_id: str, tpl: InvestigationTemplate) -> dict[str, Any] | None:
-    """Inputs of the price/cost bridge for a margin metric, found through the metric trees.
+def _entity_hops(model: SemanticModel, start: str) -> dict[str, int]:
+    """Many-to-one hops from ``start`` to every entity reachable without fan-out."""
+    edges: dict[str, set[str]] = {}
+    for r in model.approved_relationships():
+        if r.cardinality in ("many_to_one", "one_to_one"):
+            edges.setdefault(r.from_entity, set()).add(r.to_entity)
+        if r.cardinality in ("one_to_many", "one_to_one"):
+            edges.setdefault(r.to_entity, set()).add(r.from_entity)
+    out = {start: 0}
+    frontier = [start]
+    while frontier:
+        nxt: list[str] = []
+        for e in frontier:
+            for t in sorted(edges.get(e, ())):
+                if t not in out:
+                    out[t] = out[e] + 1
+                    nxt.append(t)
+        frontier = nxt
+    return out
+
+
+def bridge_metrics(model: SemanticModel, metric_id: str) -> dict[str, Any] | None:
+    """The metrics a price/cost bridge of a margin needs, found through the metric trees.
 
     A margin is ``revenue - cost (- other costs)`` in dollars, or that over ``revenue`` as a
-    rate. The bridge needs: the cost metric (a subtractive driver), a volume metric on the
-    cost's entity (units), optionally a list-price revenue metric of which revenue and a
-    discount metric are additive parts, and a product dimension at item grain. Returns None
-    when the model does not carry that structure.
+    rate. The bridge needs the cost metric (a subtractive driver), a volume metric on the
+    cost's entity (units) and, optionally, a list-price revenue metric of which revenue and a
+    discount metric are additive parts. Returns None when the model does not carry that
+    structure.
     """
     m = model.get_metric(metric_id)
     if m.kind == "ratio" and m.numerator and m.denominator:
@@ -167,13 +197,6 @@ def margin_bridge(model: SemanticModel, metric_id: str, tpl: InvestigationTempla
             ),
             None,
         )
-    usable, _ = dimensions_for_metric(model, cost)
-    item = _finest_dimension(model, usable, "product")
-    if item is None:
-        return None
-    groups = [
-        d for d in rank_dimensions(usable, tpl) if "product" in dimension_roles(d) and d.name != item.name
-    ]
     unit_cost = next(
         (
             x.id
@@ -191,10 +214,154 @@ def margin_bridge(model: SemanticModel, metric_id: str, tpl: InvestigationTempla
         "gross": gross,
         "discount": discount,
         "discount_rate": discount_rate,
-        "item_dimension": item.name,
-        "group_dimension": groups[0].name if groups else None,
         "unit_cost_metric": unit_cost,
     }
+
+
+def margin_bridge(model: SemanticModel, metric_id: str, tpl: InvestigationTemplate) -> dict[str, Any] | None:
+    """Inputs of the period-over-period price/cost bridge: :func:`bridge_metrics` plus a
+    product dimension at item grain (and a product group for the split)."""
+    found = bridge_metrics(model, metric_id)
+    if found is None:
+        return None
+    cost = found["cost"]
+    usable, _ = dimensions_for_metric(model, cost)
+    item = _finest_dimension(model, usable, "product", model.get_metric(cost).entity)
+    if item is None:
+        return None
+    groups = [
+        d for d in rank_dimensions(usable, tpl) if "product" in dimension_roles(d) and d.name != item.name
+    ]
+    return {
+        **found,
+        "item_dimension": item.name,
+        "group_dimension": groups[0].name if groups else None,
+    }
+
+
+def plan_bridge(
+    model: SemanticModel, metric_id: str, root_plan_id: str, tpl: InvestigationTemplate
+) -> dict[str, Any] | None:
+    """Inputs of the bridge of a margin *against plan*.
+
+    Applies to a margin whose identity is exactly ``revenue - cost`` in dollars, when revenue,
+    cost, volume (and list-price revenue, for the discount effect) all have plan counterparts.
+    The bridge cells are the conformed dimensions that actuals and plan share (for example
+    category x segment x region), so each cell's plan unit cost and plan discount rate come
+    from the plan itself.
+    """
+    found = bridge_metrics(model, metric_id)
+    if found is None or found["form"] != "amount":
+        return None
+    edges = set(driver_edges(model, metric_id))
+    if edges != {(found["revenue"], "additive"), (found["cost"], "subtractive")}:
+        return None
+    from .plans import plan_counterpart, shared_dimensions
+
+    plans = {k: plan_counterpart(model, found[k], root_plan_id) for k in ("revenue", "cost", "volume")}
+    if any(v is None for v in plans.values()):
+        return None
+    plan_gross = plan_counterpart(model, found["gross"], root_plan_id) if found.get("gross") else None
+    actual = [found["revenue"], found["cost"], found["volume"]] + ([found["gross"]] if plan_gross else [])
+    planned = [plans["revenue"], plans["cost"], plans["volume"]] + ([plan_gross] if plan_gross else [])
+    cells = shared_dimensions(model, [*actual, *planned])  # type: ignore[list-item]
+    if not cells:
+        return None
+    ranked = [d.name for d in rank_dimensions([model.get_dimension(c) for c in cells], tpl)]
+    # Cost basis: units by default. When the model governs (and plans) unit cost as cost per
+    # list-price dollar (a ratio cost / list-price revenue with a plan counterpart), costs are
+    # compared per list dollar, which is robust to unlike units inside a cell.
+    basis, plan_basis, basis_metric = found["volume"], plans["volume"], None
+    if plan_gross:
+        for x in sorted(model.metrics, key=lambda x: (not x.canonical, x.id)):
+            if (
+                x.kind == "ratio"
+                and x.numerator == found["cost"]
+                and x.denominator == found["gross"]
+                and plan_counterpart(model, x.id, root_plan_id) is not None
+            ):
+                basis, plan_basis, basis_metric = found["gross"], plan_gross, x.id
+                break
+    return {
+        **found,
+        "mode": "plan",
+        "attach_to": metric_id,
+        "gross": found["gross"] if plan_gross else None,
+        "plan_revenue": plans["revenue"],
+        "plan_cost": plans["cost"],
+        "plan_volume": plans["volume"],
+        "plan_gross": plan_gross,
+        "cost_basis": basis,
+        "plan_cost_basis": plan_basis,
+        "cost_basis_metric": basis_metric,
+        "cell_dimensions": ranked,
+        "below_grain_dimensions": _below_grain_dimensions(model, found["cost"], cells, tpl),
+    }
+
+
+def _below_grain_dimensions(
+    model: SemanticModel, cost_id: str, cells: list[str], tpl: InvestigationTemplate
+) -> list[str]:
+    """Dimensions the actuals carry but the plan does not (supplier, sales rep, product tier):
+    candidates for splitting a bridge effect below plan grain at the cell's plan rate. Outcome
+    states are left out; the cell dimensions themselves already split the effect."""
+    usable, _ = dimensions_for_metric(model, cost_id)
+    cell_entities = {model.get_dimension(c).entity for c in cells}
+    return [
+        d.name
+        for d in rank_dimensions(usable, tpl)
+        if d.name not in cells and d.entity not in cell_entities and "status" not in dimension_roles(d)
+    ]
+
+
+def variance_structure(
+    model: SemanticModel, metric_id: str, plan_id: str, depth: int, tpl: InvestigationTemplate
+) -> tuple[dict[str, list[list[str]]], list[dict[str, Any]], dict[str, str]]:
+    """How a gap to plan decomposes: additive identities (parent -> [child, relation, plan])
+    down to ``depth``, margin bridges where a node is ``revenue - cost``, and the plan metric of
+    every actual involved."""
+    from .plans import variance_edges
+
+    edges_by_parent: dict[str, list[list[str]]] = {}
+    bridges: list[dict[str, Any]] = []
+    plan_metrics = {metric_id: plan_id}
+    frontier = [(metric_id, 0)]
+    while frontier:
+        mid, level = frontier.pop(0)
+        if level >= depth:
+            continue
+        bridge = plan_bridge(model, mid, plan_id, tpl)
+        if bridge is not None:
+            bridges.append(bridge)
+            for a, pk in (
+                ("revenue", "plan_revenue"),
+                ("cost", "plan_cost"),
+                ("volume", "plan_volume"),
+                ("gross", "plan_gross"),
+            ):
+                if bridge.get(a) and bridge.get(pk):
+                    plan_metrics[bridge[a]] = bridge[pk]
+            continue
+        edges = variance_edges(model, mid, plan_id)
+        if edges is None:
+            continue
+        edges_by_parent[mid] = [[c, r, p] for c, r, p in edges]
+        for child, _rel, cplan in edges:
+            plan_metrics[child] = cplan
+            frontier.append((child, level + 1))
+    return edges_by_parent, bridges, plan_metrics
+
+
+def related_candidates(model: SemanticModel, metric_id: str) -> list[str]:
+    """Metrics declared operationally related (``related_metrics``) to the metric or to any
+    metric it is built from, excluding those it is built from."""
+    deps = model.metric_dependencies(metric_id)
+    out: list[str] = []
+    for dep in deps:
+        for r in model.get_metric(dep).related_metrics:
+            if r not in deps and r not in out and model.has_metric(r):
+                out.append(r)
+    return out
 
 
 def inventory_health(model: SemanticModel, metric_id: str) -> dict[str, Any] | None:
@@ -210,7 +377,7 @@ def inventory_health(model: SemanticModel, metric_id: str) -> dict[str, Any] | N
     if dos is None:
         return None
     usable, _ = dimensions_for_metric(model, metric_id)
-    item = _finest_dimension(model, usable, "product")
+    item = _finest_dimension(model, usable, "product", model.get_metric(metric_id).entity)
     if item is None:
         return None
     labels = [
@@ -278,8 +445,8 @@ def plan(
         baseline_desc = f"{sc.dimension} = {sc.baseline}, {interp.window.display()}"
     else:
         baseline_desc = (
-            f"{interp.baseline_metric_id} for {interp.window.display()}"
-            if budget_mode
+            f"{model.get_metric(interp.baseline_metric_id).display_name}, {interp.window.display()}"
+            if budget_mode and interp.baseline_metric_id and model.has_metric(interp.baseline_metric_id)
             else interp.baseline.display()
         )
     steps.append(
@@ -301,18 +468,29 @@ def plan(
 
     for pr in ctx.premises:
         pm = model.get_metric(pr.metric_id or "")
+        against = (
+            f"{pm.display_name} vs {model.get_metric(pr.baseline_metric_id).display_name}, {interp.window.display()}"
+            if pr.baseline_metric_id and model.has_metric(pr.baseline_metric_id)
+            else None
+        )
         steps.append(
             PlanStep(
                 id=f"premise:{pm.id}",
                 kind="compare",
-                title=f"Premise check: '{pr.text}'",
-                rationale="The question takes this as given; measure it over the same periods before relying on it.",
+                title=f"Verify the premise '{pr.text}'" + (f": {against}" if against else ""),
+                rationale="The question takes this as given; measure it before relying on it."
+                + (
+                    " Measured against the plan metric the question names."
+                    if against
+                    else " Measured over the same periods."
+                ),
                 params={
                     "metric_id": pm.id,
                     "role": "premise",
                     "expectation": pr.expectation,
                     "tolerance": pr.tolerance,
                     "text": pr.text,
+                    **({"baseline_metric_id": pr.baseline_metric_id} if pr.baseline_metric_id else {}),
                 },
                 estimated_queries=2,
                 origin="template",
@@ -321,6 +499,15 @@ def plan(
 
     full = interp.intent in ("why_change", "anomaly")
     light_compare = interp.intent == "compare"
+
+    variance_mode = (
+        tpl.id == "plan_variance"
+        and budget_mode
+        and not segment_mode
+        and interp.baseline_metric_id is not None
+    )
+    if variance_mode:
+        steps.extend(_variance_steps(model, metric_id, interp.baseline_metric_id or "", cfg, tpl, ctx))
 
     if tpl.id == "inventory_health":
         health = inventory_health(model, metric_id)
@@ -365,7 +552,7 @@ def plan(
         )
 
     # Driver decomposition from the metric tree
-    drivers = driver_edges(model, metric_id)
+    drivers = [] if variance_mode else driver_edges(model, metric_id)
     if bridge is not None and drivers and metric.kind == "ratio":
         notes.append(
             f"{metric.display_name} = {' / '.join(model.get_metric(c).display_name for c, _ in drivers)} is "
@@ -388,7 +575,7 @@ def plan(
                 origin="metric_tree",
             )
         )
-    elif not drivers and full:
+    elif not drivers and full and not variance_mode:
         notes.append(f"{metric.display_name} has no approved metric tree; no driver decomposition")
     elif budget_mode and drivers:
         notes.append("driver decomposition is skipped for comparisons against budget or forecast")
@@ -466,7 +653,7 @@ def plan(
             PlanStep(
                 id=f"contribution:{metric_id}:{d.name}",
                 kind="contribution",
-                title=f"{metric.display_name} change by {d.label or d.name}"
+                title=f"{metric.display_name} {'gap to plan' if budget_mode else 'change'} by {d.label or d.name}"
                 + (" (ranked by growth rate)" if interp.ranking else ""),
                 rationale=(
                     "Requested breakdown."
@@ -623,6 +810,38 @@ def plan(
                 )
             )
 
+    if variance_mode:
+        steps.append(
+            PlanStep(
+                id=f"reconcile:{metric_id}",
+                kind="reconcile",
+                title=f"Check that the parts add back to the {metric.display_name} gap to plan",
+                rationale="Every identity in the tree is summed from executed numbers: the children of each "
+                "node, and the bridge effects, must reproduce their parent's variance exactly.",
+                params={"metric_id": metric_id},
+                estimated_queries=0,
+                origin="template",
+            )
+        )
+    related = (
+        related_candidates(model, metric_id) if full and not segment_mode and cfg.related_signals else []
+    )
+    if related:
+        steps.append(
+            PlanStep(
+                id=f"related_signals:{metric_id}",
+                kind="related_signals",
+                title="Look for related operating signals where the explanation concentrates: "
+                + ", ".join(model.get_metric(r).display_name for r in related),
+                rationale="Metrics the semantic model declares operationally related are measured in the "
+                "segments where the explanation concentrates. They are reported separately as observations: "
+                "the data does not establish them as causes, and they never enter the reconciled tree.",
+                params={"metric_id": metric_id, "metrics": related},
+                estimated_queries=4 * len(related) * 3,
+                origin="template",
+            )
+        )
+
     if interp.intent == "trend" or interp.intent == "forecast":
         tdim = time_dimension_for_metric(model, metric_id)
         if tdim:
@@ -662,6 +881,69 @@ def plan(
         context=ctx,
         config=cfg,
     )
+
+
+def _variance_steps(
+    model: SemanticModel,
+    metric_id: str,
+    plan_id: str,
+    cfg: ExecutionConfig,
+    tpl: InvestigationTemplate,
+    ctx: PlanContext,
+) -> list[PlanStep]:
+    """Steps that explain a gap to plan: the variance tree, margin bridges, drills."""
+    edges, bridges, plan_metrics = variance_structure(model, metric_id, plan_id, VARIANCE_DEPTH, tpl)
+    ctx.plan_metrics = plan_metrics
+    metric = model.get_metric(metric_id)
+    label = model.get_metric
+    steps: list[PlanStep] = []
+    if edges:
+        top = edges.get(metric_id, [])
+        steps.append(
+            PlanStep(
+                id=f"decompose:{metric_id}",
+                kind="decompose",
+                title=f"Decompose the {metric.display_name} gap to plan into "
+                + " and ".join(label(c).display_name for c, _r, _p in top)
+                + ", each compared with its own plan",
+                rationale="The metric tree's additive identities hold for actuals and for plan alike, so each "
+                "child's gap to its governed plan metric (plan_for) is an exact share of the parent's gap.",
+                params={"method": "plan_variance", "metric_id": metric_id, "edges": edges},
+                estimated_queries=2 * sum(len(v) for v in edges.values()),
+                origin="metric_tree",
+            )
+        )
+    for b in bridges:
+        bm = label(b["metric_id"])
+        cells = " x ".join((model.get_dimension(c).label or c) for c in b["cell_dimensions"])
+        steps.append(
+            PlanStep(
+                id=f"margin_bridge:{b['metric_id']}",
+                kind="decompose",
+                title=f"Split the {bm.display_name} gap to plan into unit cost, discounting and volume/mix",
+                rationale=f"Counterfactuals per plan cell ({cells}): actual units at plan unit costs isolate "
+                "unit-cost changes; actual list-price sales at plan discount rates isolate discounting; the "
+                "rest is volume, mix and list price. The three add up exactly to the gap.",
+                params={"method": "margin_bridge", **b},
+                estimated_queries=2 + (2 if b.get("discount_rate") else 0),
+                origin="metric_tree",
+            )
+        )
+    if edges or bridges:
+        steps.append(
+            PlanStep(
+                id=f"variance_drill:{metric_id}",
+                kind="contribution",
+                title="Locate each material variance in the governed dimensions actuals and plan share",
+                rationale=f"Variances of at least {cfg.drill_min_share:.0%} of their parent's are broken down by "
+                "conformed dimensions (region, segment, category, branch, where the plan carries them); only "
+                "breakdowns that concentrate the variance are kept.",
+                params={"role": "variance_drill", "metric_id": metric_id, "min_share": cfg.drill_min_share},
+                estimated_queries=2 * cfg.drill_dimensions * cfg.drill_top_n * 2,
+                origin="template",
+            )
+        )
+    return steps
 
 
 # --------------------------------------------------------------------------- editing

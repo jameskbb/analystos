@@ -231,6 +231,38 @@ class MetricChange(BaseModel):
     sql: str
 
 
+class PlanVariance(BaseModel):
+    """One metric's actual against its plan metric (``plan_for``) over the latest closed quarter."""
+
+    metric_id: str
+    label: str
+    format: str
+    plan_metric_id: str
+    plan_label: str
+    stakeholder_term: str = Field(
+        default="",
+        description="The plain word for the metric from the glossary and synonyms (see stakeholder_term)",
+    )
+    plan_role: str = Field(
+        description="plan, budget, target or forecast (from the plan metric's tags), else other"
+    )
+    period: str
+    window_start: dt.date
+    window_end: dt.date = Field(description="Exclusive end of the half-open window")
+    actual: float | None
+    plan: float | None
+    variance: float | None = Field(description="actual - plan")
+    variance_pct: float | None = Field(description="(actual - plan) / |plan|")
+    higher_is_better: bool
+    status: str = Field(
+        description="on_plan (within the tolerance), favorable or unfavorable, judged by higher_is_better"
+    )
+    tolerance: float
+    sql_actual: str
+    sql_plan: str
+    metric_versions: dict[str, str] = Field(default_factory=dict)
+
+
 class HomeSummary(BaseModel):
     workspace: WorkspaceOut
     counts: dict[str, int]
@@ -243,6 +275,203 @@ class HomeSummary(BaseModel):
     running_jobs: list[JobOut]
     changes: list[MetricChange]
     changes_note: str | None = None
+    plan_variances: list[PlanVariance] = Field(default_factory=list)
+    plan_note: str | None = None
+
+
+# How close to plan still counts as "on plan": the same +/-2% the investigator uses for "flat".
+PLAN_TOLERANCE = 0.02
+# Preference when several metrics plan the same actual; any other role ranks after these.
+_PLAN_ROLES = ("plan", "budget", "target", "forecast")
+
+
+def plan_pairs(model: Any) -> dict[str, tuple[str, str]]:
+    """Actual metric id -> (plan metric id, role) for every metric a plan metric declares ``plan_for``.
+
+    When several metrics plan the same actual, a ``plan`` beats a ``budget``, a ``target`` and a
+    ``forecast``, in that order; a metric with none of those tags ranks last."""
+
+    def rank(role: str) -> int:
+        return _PLAN_ROLES.index(role) if role in _PLAN_ROLES else len(_PLAN_ROLES)
+
+    out: dict[str, tuple[str, str]] = {}
+    for m in model.metrics:
+        target = getattr(m, "plan_for", None)
+        if not target or not model.has_metric(target):
+            continue
+        tags = {t.lower() for t in m.tags}
+        role = next((r for r in _PLAN_ROLES if r in tags), "other")
+        prev = out.get(target)
+        if prev is None or rank(role) < rank(prev[1]):
+            out[target] = (m.id, role)
+    return out
+
+
+def plan_metric_order(model: Any, pairs: dict[str, tuple[str, str]], kpis: list[str]) -> list[list[str]]:
+    """Actual metrics with a plan, grouped in reading order:
+
+    1. the canonical revenue metric;
+    2. the lead metric: of the headline metrics that root a metric tree, the one whose tree has the most
+       planned parts (the widest explanation of a variance, e.g. operating profit);
+    3. the lead tree's direct parts (e.g. gross margin, operating expenses);
+    4. the lead tree's deeper parts (the lines), which the caller ranks by the size of their variance;
+    5. the other headline metrics.
+    Each metric appears once, in its first group; the five groups are always returned (some may be empty)."""
+    from ..services.reports import canonical_revenue_metric
+
+    seen: set[str] = set()
+
+    def keep(ids: list[str]) -> list[str]:
+        out = []
+        for mid in ids:
+            if mid in pairs and mid not in seen:
+                seen.add(mid)
+                out.append(mid)
+        return out
+
+    revenue = canonical_revenue_metric(model, list(pairs))
+    heads = [k for k in kpis if k in pairs]
+
+    def planned_parts(head: str) -> int:
+        tree = model.get_tree(head)
+        return sum(1 for m in tree.metric_ids() if m in pairs) if tree else 0
+
+    rooted = sorted((h for h in heads if planned_parts(h) > 1), key=lambda h: -planned_parts(h))
+    lead = rooted[0] if rooted else None
+    direct: list[str] = []
+    deeper: list[str] = []
+    if lead:
+        tree = model.get_tree(lead)
+        direct = [e.child for e in tree.children(lead)]
+        queue, visited = list(direct), {lead, *direct}
+        while queue:
+            parent = queue.pop(0)
+            for edge in tree.children(parent):
+                if edge.child not in visited:
+                    visited.add(edge.child)
+                    deeper.append(edge.child)
+                    queue.append(edge.child)
+    groups = [
+        keep([revenue] if revenue else []),
+        keep([lead] if lead else []),
+        keep(direct),
+        keep(deeper),
+        keep(heads),
+    ]
+    return groups
+
+
+def order_plan_variances(groups: list[list[str]], measured: dict[str, Any]) -> list[Any]:
+    """Flatten ``plan_metric_order`` groups into display order; the lead tree's lines (the fourth group)
+    are ranked by the size of their variance, largest first."""
+    out: list[Any] = []
+    for i, group in enumerate(groups):
+        items = [measured[m] for m in group if m in measured]
+        if i == 3:
+            items.sort(key=lambda v: -abs(v.variance or 0.0))
+        out.extend(items)
+    return out
+
+
+def stakeholder_term(model: Any, metric_id: str) -> str:
+    """The word a business stakeholder uses for a metric, read from the governed vocabulary:
+
+    1. a glossary term that points at the metric under a name other than its label ("Net Profit" for
+       Operating Profit);
+    2. else the first synonym of the glossary term that carries the metric's own name ("sales" for Revenue);
+    3. else the metric's first synonym;
+    4. else its label.
+    Lower-cased, for use inside a sentence. Used to phrase the home page's question in plain words; the
+    question still goes through the interpreter, which resolves the word back through the same vocabulary.
+    """
+    m = model.get_metric(metric_id)
+    label = (m.display_name or metric_id).strip()
+    terms = [g for g in model.glossary if g.metric_id == metric_id]
+    for g in terms:
+        if g.term.strip().lower() != label.lower():
+            return g.term.strip().lower()
+    for g in terms:
+        if g.synonyms:
+            return g.synonyms[0].strip().lower()
+    if m.synonyms:
+        return m.synonyms[0].strip().lower()
+    return label.lower()
+
+
+def plan_status(variance_pct: float | None, variance: float | None, higher_is_better: bool) -> str:
+    if variance_pct is not None and abs(variance_pct) <= PLAN_TOLERANCE:
+        return "on_plan"
+    if variance is None or variance == 0:
+        return "on_plan"
+    return "favorable" if (variance > 0) == higher_is_better else "unfavorable"
+
+
+def _plan_variances(
+    db: DbDep, state: StateDep, ws: Workspace, limit: int = 6
+) -> tuple[list[PlanVariance], str | None]:
+    """Actual vs plan for the latest closed quarter, each side an executed semantic query."""
+    from analystos_engine.analysis.compare import compare_metrics
+    from analystos_engine.calendar import CalendarError, resolve_period
+    from analystos_investigator.semantic_graph import time_dimension_for_metric
+
+    from ..services.investigations import reference_date
+    from ..services.reports import _kpi_metrics
+    from ..services.semantic import build_model
+
+    built = build_model(db, ws)
+    model = built.model
+    pairs = plan_pairs(model)
+    if not pairs:
+        return [], None
+    try:
+        # "last quarter" relative to the reference date is always a closed quarter.
+        window = resolve_period("last quarter", reference_date(ws), model.calendar)
+    except CalendarError:
+        return [], None
+    store = state.stores.get(ws.id)
+    groups = plan_metric_order(model, pairs, _kpi_metrics(built, limit=20))
+    measured: dict[str, PlanVariance] = {}
+    for mid in [m for g in groups for m in g][:16]:
+        plan_id, role = pairs[mid]
+        tdim = time_dimension_for_metric(model, mid)
+        w = window.with_dimension(tdim) if tdim else window
+        try:
+            c = compare_metrics(store, model, mid, plan_id, w)
+        except Exception:  # noqa: BLE001 - a metric that cannot be compared is skipped, never estimated
+            continue
+        if c.current is None or c.baseline is None:
+            continue
+        m = model.get_metric(mid)
+        measured[mid] = PlanVariance(
+            metric_id=mid,
+            label=m.display_name,
+            format=m.format,
+            stakeholder_term=stakeholder_term(model, mid),
+            plan_metric_id=plan_id,
+            plan_label=model.get_metric(plan_id).display_name,
+            plan_role=role,
+            period=window.display(),
+            window_start=window.start,
+            window_end=window.end,
+            actual=c.current,
+            plan=c.baseline,
+            variance=c.abs_change,
+            variance_pct=c.pct_change,
+            higher_is_better=m.higher_is_better,
+            status=plan_status(c.pct_change, c.abs_change, m.higher_is_better),
+            tolerance=PLAN_TOLERANCE,
+            sql_actual=c.sql_current,
+            sql_plan=c.sql_baseline,
+            metric_versions=c.metric_versions,
+        )
+    out = order_plan_variances(groups, measured)[:limit]
+    note = (
+        f"{window.display()} (the latest closed quarter) against plan. On plan means within "
+        f"±{PLAN_TOLERANCE:.0%} of the plan value."
+        if out
+        else None
+    )
+    return out, note
 
 
 def _changes(db: DbDep, state: StateDep, ws: Workspace) -> tuple[list[MetricChange], str | None]:
@@ -381,6 +610,10 @@ def home(ctx: ViewerCtx, db: DbDep, state: StateDep) -> HomeSummary:
         changes, note = _changes(db, state, ctx.workspace)
     except Exception as exc:  # noqa: BLE001 - home must render even if a metric cannot be computed
         changes, note = [], f"Changes unavailable: {exc}"
+    try:
+        plan_vars, plan_note = _plan_variances(db, state, ctx.workspace)
+    except Exception as exc:  # noqa: BLE001 - same: home renders without the plan comparison
+        plan_vars, plan_note = [], f"Plan comparison unavailable: {exc}"
     ws = ctx.workspace
     return HomeSummary(
         workspace=WorkspaceOut(
@@ -452,6 +685,8 @@ def home(ctx: ViewerCtx, db: DbDep, state: StateDep) -> HomeSummary:
         running_jobs=[JobOut.model_validate(j) for j in jobs],
         changes=changes,
         changes_note=note,
+        plan_variances=plan_vars,
+        plan_note=plan_note,
     )
 
 

@@ -156,11 +156,22 @@ export function contextChips(
   const out: FilterContextItem[] = [];
   if (interp?.window) out.push({ label: "Period", value: windowLabel(interp.window), kind: "time" });
   if (interp?.baseline)
-    out.push({
-      label: interp.comparison_kind === "yoy" ? "Baseline (YoY)" : "Baseline",
-      value: windowLabel(interp.baseline),
-      kind: "baseline",
-    });
+    out.push(
+      interp.baseline_metric_id && (interp.comparison_kind === "budget" || interp.comparison_kind === "forecast")
+        ? { label: "Against", value: `${humanize(interp.baseline_metric_id)}, ${windowLabel(interp.baseline)}`, kind: "baseline" }
+        : {
+            label: interp.comparison_kind === "yoy" ? "Baseline (YoY)" : "Baseline",
+            value: windowLabel(interp.baseline),
+            kind: "baseline",
+          },
+    );
+  // A premise or related signal has its own comparison (a target metric, the previous period): show that one.
+  if (node?.baseline_label && (node.role === "premise" || node.role === "related_signal")) {
+    const i = out.findIndex((c) => c.kind === "baseline");
+    const chip: FilterContextItem = { label: "Against", value: node.baseline_label, kind: "baseline" };
+    if (i >= 0) out[i] = chip;
+    else out.push(chip);
+  }
   for (const f of interp?.filters ?? []) out.push(filterChip(f));
   const path = node?.segment_path?.length ? node.segment_path : node?.segment ? [node.segment] : [];
   for (const s of path) out.push({ label: humanize(s.dimension), value: s.value ?? "(null)", kind: "segment", inherited: s !== path[path.length - 1] });
@@ -246,8 +257,18 @@ export const METHOD_LABEL: Record<string, string> = {
     "Not additive: the segments overlap (e.g. one order spans several categories), so no share of the parent change is claimed; only segment-level values are shown.",
 };
 
-/** A premise check node ("revenue was roughly flat") reports whether the premise held over the periods. */
-export function premiseVerdict(node: { kind?: string | null; notes?: string[] | null }): "holds" | "contradicted" | null {
+/**
+ * A premise check node ("revenue was roughly flat", "we made our sales number") reports whether the
+ * premise held. Newer payloads carry `role: "premise"` and `verdict`; older ones a "premise holds" note.
+ */
+export function premiseVerdict(node: {
+  kind?: string | null;
+  notes?: string[] | null;
+  role?: string | null;
+  verdict?: string | null;
+}): "holds" | "contradicted" | null {
+  if (node.verdict === "supported") return "holds";
+  if (node.verdict === "contradicted") return "contradicted";
   if (node.kind !== "check") return null;
   const n = (node.notes ?? []).find((x) => /^premise (holds|contradicted)$/.test(x));
   return n ? (n.endsWith("holds") ? "holds" : "contradicted") : null;

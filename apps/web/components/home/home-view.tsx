@@ -29,13 +29,14 @@ import { Badge } from "@/components/ui/badge";
 import { AskBox } from "./ask-box";
 import { Onboarding } from "./onboarding";
 import { useHomeSummary } from "./use-home-summary";
+import { PlanPanel } from "./plan-panel";
 import { cn } from "@/lib/utils";
 
 const DEFAULT_EXAMPLES = [
   "Why was August revenue down?",
   "Revenue was roughly flat. Why did margin decline?",
   "Which region drove the change in orders last month?",
-  "What caused the forecast miss?",
+  "Operating profit vs plan last quarter: what explains the gap?",
 ];
 
 /** Suggested questions: the biggest metric moves first, then general templates. */
@@ -374,6 +375,7 @@ export function HomeView() {
               <Onboarding workspaceId={ws} href={href} />
             ) : (
               <>
+                {data.plan_variances?.length ? <PlanPanel items={data.plan_variances} note={data.plan_note} /> : null}
                 <AskBox workspaceId={ws} href={href} examples={exampleQuestions(data.changes)} />
                 {data.changes.length ? <ChangeStrip changes={data.changes} /> : null}
                 <div className="grid grid-cols-1 gap-4 lg:grid-cols-2 2xl:grid-cols-3">

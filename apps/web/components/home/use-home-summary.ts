@@ -18,6 +18,9 @@ export function normalizeHome(raw: Partial<HomeSummary> | null | undefined): Hom
     pending_relationships: raw?.pending_relationships ?? 0,
     running_jobs: raw?.running_jobs ?? [],
     changes: raw?.changes ?? [],
+    changes_note: raw?.changes_note ?? null,
+    plan_variances: raw?.plan_variances ?? [],
+    plan_note: raw?.plan_note ?? null,
   };
 }
 

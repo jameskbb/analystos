@@ -71,17 +71,31 @@ LLM -> Planner/Orchestrator -> Analytical Tools -> Validated Results
 
 ## Request path for a question
 
-1. The web app posts the question to `POST /workspaces/{ws}/investigations`.
+1. The web app posts the question to `POST /workspaces/{ws}/investigations`. The home page's
+   *Against plan* panel (`GET /workspaces/{ws}/home`, `plan_variances`: each metric with a `plan_for`
+   plan metric, actual against plan over the latest closed quarter, both sides executed queries) can
+   compose that question for the user, but the question goes through the same path as a typed one.
 2. The API loads the workspace's current semantic model and calls the investigator.
 3. The investigator interprets the question deterministically against the model (metrics, synonyms,
-   glossary, calendar). An ambiguous term stops here and asks the analyst to choose.
+   glossary, calendar). An ambiguous term stops here and asks the analyst to choose. Premises the
+   question states ("revenue was roughly flat", "we made our sales number") become checks, and a
+   comparison against plan pairs each metric with its governed plan metric.
 4. It builds a plan from the metric tree, the metric's reachable dimensions and a template. Plans
    estimated above 40 queries wait for approval.
 5. Each step compiles a `MetricQuery` through the engine's semantic compiler, runs it read-only on the
    workspace store, validates the result and records an artifact (SQL, parameters, filters, metric
    versions, dataset versions, result snapshot, chart spec, lineage parents).
-6. Attribution arithmetic builds the tree; evidence-strength rules label each node; the API persists
-   the run with the metric versions and dataset versions it used, so it can be rerun and diffed.
+6. Attribution arithmetic builds the tree; evidence-strength rules label each node; a reconciliation
+   node checks that the parts add back to the parent change; against a plan, the reconciled parts
+   also form a plan-to-actual bridge (`Investigation.bridge`), and immaterial lines are grouped into
+   one "Other lines, net" node; related signals (verified observations
+   whose relationship to the change is not established) are recorded next to the tree, never inside
+   it. The API persists the run with the metric versions and dataset versions it used, so it can be
+   rerun and diffed.
+7. The analyst confirms or rejects nodes and saves findings. Reports built from the investigation,
+   and the monthly or quarterly business review, are written from confirmed evidence only (for a plan
+   gap, an operating-review memo with the bridge), and must be reviewed block by block before
+   publishing.
 
 ## Reproducibility
 

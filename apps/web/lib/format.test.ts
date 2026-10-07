@@ -4,6 +4,9 @@ import { formatCompact, formatPctChange, formatSignedChange, formatValue, format
 describe("format", () => {
   it("formats business values", () => {
     expect(formatValue(4200000, "currency")).toBe("$4,200,000");
+    // A small value first must not make large ones print cents (the formatter cache is keyed by digits).
+    expect(formatValue(12.5, "currency")).toBe("$12.50");
+    expect(formatValue(1932914.81, "currency")).toBe("$1,932,915");
     expect(formatValue(0.118, "percent")).toBe("11.8%");
     expect(formatCompact(4200000, "currency")).toBe("$4.2M");
     expect(formatCompact(-420000, "currency")).toBe("-$420K");

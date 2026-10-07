@@ -5,8 +5,8 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { AlertTriangle, ListPlus, RefreshCw, X } from "lucide-react";
 import { artifacts as artifactsApi, explore, findings as findingsApi, metrics as metricsApi, queries as queriesApi, semantic } from "@/lib/api/endpoints";
 import { qk } from "@/lib/api/keys";
-import type { ChartConfig, Finding, QueryResult } from "@/lib/api/types";
-import type { ReportBlockSpec, SourceItem, SummaryEntry } from "@/lib/api/resources/outputs";
+import type { Bridge, ChartConfig, Finding, QueryResult } from "@/lib/api/types";
+import type { KpiOverviewItem, ReportBlockSpec, SourceItem, SummaryEntry } from "@/lib/api/resources/outputs";
 import { useOptionalWorkspace, useWorkspace } from "@/components/providers/workspace";
 import { Statement } from "@/components/analysis/statement";
 import { EvidenceBadge } from "@/components/analysis/evidence";
@@ -23,8 +23,9 @@ import { Field } from "@/components/ui/label";
 import { InlineError } from "@/components/states/states";
 import { Spinner } from "@/components/ui/spinner";
 import { suggestChart } from "@/lib/charts/suggest";
-import { humanize, toNumber } from "@/lib/format";
+import { formatPctChange, formatSignedChange, formatValue, humanize, toNumber } from "@/lib/format";
 import { Markdown } from "./markdown";
+import { BridgeChart, BridgeTable } from "@/components/investigation/bridge-chart";
 import { buildSummaryBlock, collectSources, entryText, monthLabel, snapshotFinding } from "./model";
 
 const SECTION_META = [
@@ -153,13 +154,180 @@ function SourcesView({ items }: { items: (SourceItem | string)[] }) {
   );
 }
 
+/**
+ * The blocks as a reader sees them: an operating review followed by its bridge block (and the bridge's
+ * "Plan to actual" table) reads as one memo, so the bridge folds into the memo right under the headline;
+ * a heading or memo title that repeats the report's own title is not printed twice. The report itself
+ * is unchanged: every block keeps its own review checkbox.
+ */
+export function readingBlocks(blocks: ReportBlockSpec[], reportTitle?: string | null): ReportBlockSpec[] {
+  const out: ReportBlockSpec[] = [];
+  for (let i = 0; i < blocks.length; i++) {
+    const b = blocks[i];
+    if (b.type === "heading" && reportTitle && (b.text || b.title) === reportTitle) continue;
+    if (b.type === "narrative" && b.label === "Operating review") {
+      const next = blocks[i + 1];
+      const bridge = next?.type === "bridge" ? bridgeFromBlock(next) : null;
+      out.push({ ...b, title: b.title === reportTitle ? null : b.title, bridge: b.bridge ?? bridge });
+      if (bridge) {
+        i += 1;
+        const after = blocks[i + 1];
+        if (after?.type === "table" && after.title === "Plan to actual") i += 1;
+      }
+      continue;
+    }
+    out.push(b);
+  }
+  return out;
+}
+
+/** A `bridge` report block as a Bridge (the block carries the same numbers as Investigation.bridge). */
+export function bridgeFromBlock(block: ReportBlockSpec): Bridge | null {
+  if (!block.steps?.length || block.start === null || block.start === undefined || block.end === null || block.end === undefined) return null;
+  return {
+    metric_id: block.metric_id ?? "",
+    metric_label: block.metric_label ?? "Total",
+    metric_format: block.format ?? "currency",
+    start_label: block.start_label ?? "Plan",
+    start: block.start,
+    end_label: block.end_label ?? "Actual",
+    end: block.end,
+    gap: block.gap ?? null,
+    steps: block.steps,
+    reconciled: block.reconciled ?? null,
+  };
+}
+
+/** The business review's KPI overview: each KPI against the prior period and, where one exists, its plan. */
+function KpiOverviewView({ block }: { block: ReportBlockSpec }) {
+  const items = (block.items ?? []) as unknown as KpiOverviewItem[];
+  const withPlan = items.some((k) => k.plan !== null && k.plan !== undefined);
+  return (
+    <figure data-testid="block-kpi-overview">
+      <figcaption className="mb-1 text-sm font-semibold">{block.title || "KPI overview"}</figcaption>
+      <table className="w-full text-sm" aria-label={block.title || "KPI overview"}>
+        <thead className="text-left text-xs text-fg-subtle">
+          <tr>
+            <th className="py-1 pr-2 font-medium">Metric</th>
+            <th className="py-1 pr-2 text-right font-medium">Value</th>
+            <th className="py-1 pr-2 text-right font-medium">vs prior</th>
+            <th className="py-1 pr-2 text-right font-medium">YoY</th>
+            {withPlan ? <th className="py-1 pr-2 text-right font-medium">Plan</th> : null}
+            {withPlan ? <th className="py-1 text-right font-medium">vs plan</th> : null}
+          </tr>
+        </thead>
+        <tbody>
+          {items.map((k) => (
+            <tr key={k.metric_id} className="border-t border-border tabular">
+              <td className="py-1 pr-2">{k.label}</td>
+              <td className="py-1 pr-2 text-right">{formatValue(k.value, k.format)}</td>
+              <td className="py-1 pr-2 text-right">{formatPctChange(k.pct_change)}</td>
+              <td className="py-1 pr-2 text-right">{formatPctChange(k.yoy_pct_change)}</td>
+              {withPlan ? <td className="py-1 pr-2 text-right">{k.plan === null || k.plan === undefined ? "n/a" : formatValue(k.plan, k.format)}</td> : null}
+              {withPlan ? (
+                <td className="py-1 text-right">
+                  {k.plan === null || k.plan === undefined ? "n/a" : `${formatPctChange(k.plan_variance_pct)} (${formatSignedChange(k.plan_variance, k.format)})`}
+                </td>
+              ) : null}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </figure>
+  );
+}
+
+/**
+ * The operating review built from the accepted parts of a plan-variance investigation. Its markdown is
+ * the engine's; around it the block states whether it reconciles and which parts still await review.
+ */
+function OperatingReviewView({ block }: { block: ReportBlockSpec }) {
+  const bullets = block.bullets ?? block.causes ?? null;
+  const structured = !!(block.headline || bullets?.length);
+  return (
+    <section data-testid="block-operating-review" aria-label={block.title || "Operating review"} className="flex flex-col gap-3">
+      <div className="flex flex-wrap items-center gap-2">
+        {block.title !== null ? <h3 className="text-base font-semibold">{block.title || "Operating review"}</h3> : null}
+        {block.reconciled ? (
+          <span className="rounded-sm bg-positive-soft px-1.5 text-2xs font-medium text-positive">Reconciles exactly</span>
+        ) : block.pending?.length ? (
+          <span className="rounded-sm bg-warning-soft px-1.5 text-2xs font-medium text-warning">
+            Not yet confirmed: {block.pending.length} part{block.pending.length === 1 ? "" : "s"} awaiting review
+          </span>
+        ) : null}
+      </div>
+      {block.headline ? <p className="text-base font-medium" data-memo="headline">{block.headline}</p> : null}
+      {block.premise ? <p className="text-sm text-fg-muted" data-memo="premise">{block.premise}</p> : null}
+      {block.bridge?.steps?.length ? (
+        <div className="flex flex-col gap-2 rounded border border-border p-3" data-memo="bridge">
+          <BridgeChart bridge={block.bridge} height={230} column={78} wrapAt={14} />
+          <BridgeTable bridge={block.bridge} />
+        </div>
+      ) : null}
+      {structured ? (
+        <>
+          {bullets?.length ? (
+            <div data-memo="explains">
+              <h4 className="mb-1 text-sm font-semibold">What explains it</h4>
+              <ul className="flex list-disc flex-col gap-1 pl-5 text-sm">
+                {bullets.map((b, i) => (
+                  <li key={i}>{b}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+          {block.related?.length ? (
+            <div data-memo="related">
+              <h4 className="mb-1 text-sm font-semibold">Related signals (relationship not established)</h4>
+              <ul className="flex list-disc flex-col gap-1 pl-5 text-sm text-fg-muted">
+                {block.related.map((b, i) => (
+                  <li key={i}>{b}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+          {block.watch?.length ? (
+            <div data-memo="watch">
+              <h4 className="mb-1 text-sm font-semibold">What to watch</h4>
+              <ul className="flex list-disc flex-col gap-1 pl-5 text-sm">
+                {block.watch.map((b, i) => (
+                  <li key={i}>{b}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+        </>
+      ) : block.markdown?.trim() ? (
+        <Markdown>{block.markdown}</Markdown>
+      ) : (
+        <p className="text-sm text-fg-subtle italic">No accepted findings yet.</p>
+      )}
+    </section>
+  );
+}
+
 /** Read-only rendering of one block; used by the reading view, print and the editor preview. */
 export function BlockView({ block }: { block: ReportBlockSpec }) {
   switch (block.type) {
     case "heading":
       return <h2 className="text-lg font-semibold tracking-tight">{block.text || block.title || "Untitled section"}</h2>;
     case "narrative":
+      if (block.label === "Operating review") return <OperatingReviewView block={block} />;
       return block.markdown?.trim() ? <Markdown>{block.markdown}</Markdown> : <p className="text-sm text-fg-subtle italic">Empty narrative.</p>;
+    case "kpi_overview":
+      return <KpiOverviewView block={block} />;
+    case "bridge": {
+      const bridge = bridgeFromBlock(block);
+      return bridge ? (
+        <figure data-testid="block-bridge" className="flex flex-col gap-2">
+          {block.title ? <figcaption className="text-sm font-semibold">{block.title}</figcaption> : null}
+          <BridgeChart bridge={bridge} height={220} />
+          <BridgeTable bridge={bridge} />
+        </figure>
+      ) : (
+        <p className="text-sm text-fg-subtle italic">Bridge has no steps.</p>
+      );
+    }
     case "methodology":
       return (
         <div>
@@ -180,8 +348,13 @@ export function BlockView({ block }: { block: ReportBlockSpec }) {
             baseline={block.baseline}
             pctChange={block.pct_change}
             format={block.format}
-            comparisonLabel="vs prior period"
+            comparisonLabel={block.baseline_label ? `vs ${block.baseline_label.toLowerCase() === "plan" ? "plan" : block.baseline_label}` : "vs prior period"}
           />
+          {block.verdict ? (
+            <span className={block.verdict === "supported" ? "text-sm font-medium text-positive" : "text-sm font-medium text-negative"} data-testid="block-kpi-verdict">
+              {block.note ?? (block.verdict === "supported" ? "Premise supported by the data" : "Premise contradicted by the data")}
+            </span>
+          ) : null}
           {block.sql ? (
             <details className="min-w-0 flex-1 text-xs no-print">
               <summary className="cursor-pointer text-fg-subtle">Query</summary>

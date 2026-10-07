@@ -20,6 +20,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { EmptyState, ErrorState, LoadingState } from "@/components/states/states";
 import { Spinner } from "@/components/ui/spinner";
 import { formatRelative, pluralize } from "@/lib/format";
+import { cn } from "@/lib/utils";
 import { InvestigationTreeView } from "./investigation-tree";
 import { NodeDetail } from "./node-detail";
 import { EvidencePanel } from "./evidence-panel";
@@ -28,6 +29,10 @@ import { CommandBar } from "./command-bar";
 import { parentFormatOf } from "./model";
 import { PlanEditor } from "./plan-editor";
 import { DiffView } from "./diff-view";
+import { AnswerStrip } from "./answer-strip";
+import { bridgeOf } from "./bridge";
+import { RelatedSignalsList } from "./related-signals";
+import { explanationTree, overlappingViewIds, reconciliationNode, signalRecord, storyExpansion } from "./answer";
 import {
   RUNNING_STATUSES,
   contextChips,
@@ -49,6 +54,25 @@ function useMediaQuery(query: string): boolean {
     return () => mq.removeEventListener("change", on);
   }, [query]);
   return match;
+}
+
+/** The brief answer, clamped to three lines with a toggle: the cards below carry the headline numbers. */
+function BriefAnswer({ text, lead }: { text: string; lead?: string | null }) {
+  const [open, setOpen] = React.useState(false);
+  // The engine's short lead when it has one; the full answer one click away.
+  const shown = open ? text : lead || text;
+  return (
+    <div className="min-w-0 rounded border border-border bg-bg-subtle px-3 py-2" data-testid="brief-answer">
+      <Statement type="observation" showBadge={false} className={cn("border-l-accent", !open && "line-clamp-3")}>
+        {shown}
+      </Statement>
+      {text.length > 280 || (lead && lead !== text) ? (
+        <button type="button" className="mt-0.5 text-2xs text-accent hover:underline" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
+          {open ? "Show less" : "Show the full answer"}
+        </button>
+      ) : null}
+    </div>
+  );
 }
 
 function PanelTitle({ children, actions }: { children: React.ReactNode; actions?: React.ReactNode }) {
@@ -165,6 +189,8 @@ function WorkstationPanels({
 }) {
   const wide = useMediaQuery("(min-width: 1024px)");
   const node = selectedId ? tree.nodes.get(selectedId) ?? null : null;
+  // The tree shows the explanation; related signals are listed apart from it (never reconciled into it).
+  const shown = React.useMemo(() => explanationTree(tree), [tree]);
   const nodeArtifacts = (node?.artifact_ids ?? []).map((a) => artifacts.get(a)).filter((a): a is ArtifactRecord => !!a);
   const filters = contextChips(investigation.interpretation, node);
 
@@ -196,7 +222,8 @@ function WorkstationPanels({
         Investigation tree
       </PanelTitle>
       <div className="min-h-0 flex-1 overflow-auto px-1 scrollbar-thin">
-        <InvestigationTreeView tree={tree} selectedId={selectedId} onSelect={setSelectedId} expanded={expanded} onExpandedChange={setExpanded} />
+        <InvestigationTreeView tree={shown} selectedId={selectedId} onSelect={setSelectedId} expanded={expanded} onExpandedChange={setExpanded} />
+        <RelatedSignalsList tree={tree} signals={investigation.related_signals} selectedId={selectedId} onSelect={setSelectedId} />
       </div>
     </div>
   );
@@ -213,6 +240,9 @@ function WorkstationPanels({
           onExpandAll={() => expandAllBelow(node.id)}
           canEdit={canEdit}
           parentFormat={parentFormatOf(tree, node)}
+          root={tree.rootId ? tree.nodes.get(tree.rootId) ?? null : null}
+          onSelectNode={setSelectedId}
+          provisional={!!(node && signalRecord(investigation.related_signals, node.id)?.provisional)}
         />
       ) : (
         <EmptyState compact title="Select a node" description="Choose a node in the tree to see its calculation, chart and evidence." />
@@ -224,7 +254,14 @@ function WorkstationPanels({
     <div className="flex h-full min-h-0 flex-col">
       <PanelTitle>Evidence &amp; methodology</PanelTitle>
       <div className="min-h-0 flex-1 overflow-auto scrollbar-thin">
-        <EvidencePanel node={node} artifacts={nodeArtifacts} investigation={investigation} hypotheses={investigation.hypotheses ?? []} />
+        <EvidencePanel
+          node={node}
+          artifacts={nodeArtifacts}
+          investigation={investigation}
+          hypotheses={investigation.hypotheses ?? []}
+          root={tree.rootId ? tree.nodes.get(tree.rootId) ?? null : null}
+          reconciliation={reconciliationNode(tree)?.reconciliation ?? null}
+        />
       </div>
     </div>
   );
@@ -325,7 +362,10 @@ export function Workstation({ investigationId }: { investigationId: string }) {
       return;
     }
     initializedFor.current = key;
-    setExpanded(defaultExpanded(tree, 2));
+    // Overlapping views of the gap (a dimension breakdown next to a reconciled explanation) start collapsed.
+    // A decomposed gap opens along the path to its operational causes; anything else, two levels.
+    const overlapping = overlappingViewIds(tree);
+    setExpanded(storyExpansion(tree) ?? new Set([...defaultExpanded(tree, 2)].filter((id) => !overlapping.has(id))));
     setSelectedId((s) => (s && tree.nodes.has(s) ? s : tree.rootId));
   }, [hasTree, tree, investigationId, data?.run_count, selectedId]);
 
@@ -409,11 +449,7 @@ export function Workstation({ investigationId }: { investigationId: string }) {
         {hasTree ? (
           <div className="mt-2 grid gap-2 lg:grid-cols-[minmax(0,1fr)_minmax(320px,440px)]">
             {answer ? (
-              <div className="min-w-0 rounded border border-border bg-bg-subtle px-3 py-2">
-                <Statement type="observation" showBadge={false} className="border-l-accent">
-                  {answer}
-                </Statement>
-              </div>
+              <BriefAnswer text={answer} lead={data.brief_lead} />
             ) : (
               <div />
             )}
@@ -430,6 +466,7 @@ export function Workstation({ investigationId }: { investigationId: string }) {
             />
           </div>
         ) : null}
+        {hasTree ? <AnswerStrip tree={tree} interpretation={data.interpretation} onSelect={setSelectedId} bridge={bridgeOf(data, tree)} /> : null}
         {data.failures?.length ? (
           <details className="mt-2 text-xs text-warning">
             <summary className="cursor-pointer">

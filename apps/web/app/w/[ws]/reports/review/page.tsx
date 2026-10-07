@@ -12,14 +12,15 @@ import { Page, PageBody, PageHeader, Panel } from "@/components/shell/page";
 import { EmptyState, InlineError, QueryState } from "@/components/states/states";
 import { StatusBadge } from "@/components/analysis/status";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { Input, NativeSelect } from "@/components/ui/input";
 import { Field } from "@/components/ui/label";
 import { Spinner } from "@/components/ui/spinner";
-import { latestFullMonth, monthLabel, reviewState } from "@/components/outputs/model";
+import { latestFullMonth, latestFullQuarter, monthLabel, recentQuarters, reviewState } from "@/components/outputs/model";
 import { formatRelative } from "@/lib/format";
 
 const CONTENTS = [
-  "KPI overview for canonical metrics vs the prior month",
+  "KPI overview for canonical metrics vs the prior period, and against plan where a plan exists",
+  "For a quarter with a completed plan investigation: the operating review from its accepted findings",
   "Largest changes, with positive and negative drivers",
   "Anomalies detected in the month",
   "Segment movements (region, customer segment, product category, channel)",
@@ -31,7 +32,10 @@ export default function BusinessReviewPage() {
   const { id: ws, href, canEdit } = useWorkspace();
   const router = useRouter();
   const qc = useQueryClient();
-  const [period, setPeriod] = React.useState(() => latestFullMonth(new Date()));
+  const [grain, setGrain] = React.useState<"month" | "quarter">("month");
+  const [month, setMonth] = React.useState(() => latestFullMonth(new Date()));
+  const [quarter, setQuarter] = React.useState(() => latestFullQuarter(new Date()));
+  const period = grain === "month" ? month : quarter;
   const [title, setTitle] = React.useState("");
   const [progress, setProgress] = React.useState<string | null>(null);
   const existing = useQuery({
@@ -71,7 +75,7 @@ export default function BusinessReviewPage() {
           </Link>
         }
         title="Business review"
-        description="A monthly operating review computed from the semantic layer, then reviewed by an analyst before it is published."
+        description="A monthly or quarterly operating review computed from the semantic layer, then reviewed by an analyst before it is published."
       />
       <PageBody>
         <div className="grid gap-4 lg:grid-cols-[minmax(0,420px)_minmax(0,1fr)]">
@@ -83,9 +87,27 @@ export default function BusinessReviewPage() {
                 if (period) generate.mutate();
               }}
             >
-              <Field label="Month" htmlFor="br-period" hint="Defaults to the latest complete month.">
-                <Input id="br-period" type="month" required value={period} onChange={(e) => setPeriod(e.target.value)} className="w-44" />
+              <Field label="Review a" htmlFor="br-grain">
+                <NativeSelect id="br-grain" value={grain} onChange={(e) => setGrain(e.target.value as "month" | "quarter")} className="w-44">
+                  <option value="month">Month</option>
+                  <option value="quarter">Quarter</option>
+                </NativeSelect>
               </Field>
+              {grain === "month" ? (
+                <Field label="Month" htmlFor="br-period" hint="Defaults to the latest complete month.">
+                  <Input id="br-period" type="month" required value={month} onChange={(e) => setMonth(e.target.value)} className="w-44" />
+                </Field>
+              ) : (
+                <Field label="Quarter" htmlFor="br-quarter" hint="Defaults to the latest complete quarter.">
+                  <NativeSelect id="br-quarter" value={quarter} onChange={(e) => setQuarter(e.target.value)} className="w-44">
+                    {recentQuarters(new Date(), 8).map((q) => (
+                      <option key={q} value={q}>
+                        {q}
+                      </option>
+                    ))}
+                  </NativeSelect>
+                </Field>
+              )}
               <Field label="Title" htmlFor="br-title">
                 <Input id="br-title" value={title} placeholder={`Business review · ${monthLabel(period)}`} onChange={(e) => setTitle(e.target.value)} />
               </Field>

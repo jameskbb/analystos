@@ -179,7 +179,8 @@ export const CommandBar = React.forwardRef<
               type="button"
               onClick={() => submit(f.command ?? f.label)}
               disabled={run.isPending}
-              className="h-6 rounded-sm border border-border bg-bg-subtle px-2 text-xs text-fg-muted hover:border-border-strong hover:text-fg"
+              title={f.label}
+              className="h-6 max-w-full truncate rounded-sm border border-border bg-bg-subtle px-2 text-xs text-fg-muted hover:border-border-strong hover:text-fg"
             >
               {f.label}
             </button>

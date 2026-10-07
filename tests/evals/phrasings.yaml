@@ -1,0 +1,2262 @@
+# Phrasing corpus for the AnalystOS question interpreter (Summit Supply Co. demo).
+#
+# Authorship. This file was written BLIND to the interpreter: the author read the
+# README, docs/demo-scenarios.md, docs/semantic-layer.md, the demo semantic model
+# (metric ids, dimensions, glossary), the answer key (scenarios.json) and the
+# Interpretation fields in models.py, and did not read interpret.py, vocabulary.py,
+# commands.py or any existing phrasing test. The questions are written the way a
+# CEO, CFO, operations leader, sales leader or analyst would actually put them,
+# not the way the matcher parses them. When an entry fails, the question is the
+# specification and the interpreter is what changes; do not reword a question or
+# loosen an expectation to make the matcher pass.
+#
+# Reference date ("today") is 2026-09-30. Fiscal year = calendar year. So
+# "last quarter" is Q2 2026, "this quarter" is Q3 2026 (in progress), "last month"
+# is August 2026, "this month" is September 2026, "last year" is 2025 and
+# "this year" is 2026 to date. Lead conversion is cohort based on lead creation.
+#
+# Entry format
+#   id        stable identifier; never renumbered
+#   story     which demo story (or corpus slice) the question belongs to:
+#             operating_profit_miss_q2_2026, revenue_decline_aug_2026,
+#             margin_compression_q2_2026, conversion_decline_q2_2026,
+#             inventory_buildup_2026, general (plain lookups, breakdowns, trends),
+#             ambiguity (the right behaviour is to ask), unresolved (the right
+#             behaviour is to say the metric is not governed)
+#   speaker   ceo | cfo | ops | sales | analyst
+#   register  terse | casual | idiomatic | formal
+#   question  the exact text a stakeholder would type
+#   split     dev | holdout (see below)
+#   expect    only what a competent human analyst would be confident about
+#   note      why an expectation is a judgement call, or what was left out and why
+#
+# expect fields (all optional; absent means "not asserted", never "must be empty")
+#   metric            the governed metric id the question is about
+#   metric_any_of     the question is about one of these and a human could read it
+#                     either way; any of them is acceptable (rare, always with a note)
+#   ambiguous_among   the question must be clarified before running; these are the
+#                     candidates a human would offer (the interpreter may list more)
+#   unresolved: true  no governed metric exists for what was asked; the right answer
+#                     says so instead of substituting a neighbour
+#   comparison        pop | yoy | budget | segment | none. "budget" covers plan, AOP,
+#                     budget, target and quota, which for FY26 are the same plan.
+#   window            2026-Q2 | 2026-08 | 2026 (calendar year to date) |
+#                     2026-06-30 (a snapshot date) | 2025-01..2026-09 (a range)
+#   baseline          same notation as window; only when the question implies it
+#   baseline_metric   the plan/target metric the question names as its yardstick
+#   premises          list of {metric, expectation}; expectation is one of
+#                     meets_plan | misses_plan | flat | up | down. "meets_plan" on a
+#                     cost line means at or under plan; "misses_plan" means over it.
+#   filters           {dimension: value} or {dimension: [values]} using semantic
+#                     model dimension names and values that exist in the data
+#   unresolved_filters  text the question uses as a filter that maps to no governed
+#                     dimension value (the interpreter should surface it, not drop it)
+#   breakdown         dimension(s) the question asks to split by
+#   intent            why_change | compare | breakdown | trend | lookup, only when
+#                     it is beyond dispute
+#
+# dev / holdout split. About a third of the entries are "holdout", chosen at
+# authoring time and stratified across stories and speakers so that every story and
+# every speaker has holdout coverage. The split is fixed: an entry never moves
+# between splits, and new entries get their split assigned when they are added.
+# Iterate the interpreter against dev only; run holdout to report generalisation,
+# never to tune. A holdout failure is information, not a bug in the corpus.
+
+entries:
+
+  # --------------------------------------------------------------------------
+  # Story 0: Q2 2026 operating profit vs the FY26 Operating Plan (the flagship)
+  # --------------------------------------------------------------------------
+
+  - id: op-01
+    story: operating_profit_miss_q2_2026
+    speaker: ceo
+    register: casual
+    question: "We made our sales number last quarter, but we missed our target for net profit. What happened?"
+    split: dev
+    expect:
+      metric: operating_profit
+      comparison: budget
+      window: 2026-Q2
+      premises:
+        - {metric: revenue, expectation: meets_plan}
+      intent: why_change
+    note: "Net profit resolves to operating profit through the glossary (interest and tax are held at corporate)."
+
+  - id: op-02
+    story: operating_profit_miss_q2_2026
+    speaker: ceo
+    register: terse
+    question: "Why did we miss plan on operating profit in Q2?"
+    split: holdout
+    expect:
+      metric: operating_profit
+      comparison: budget
+      window: 2026-Q2
+      intent: why_change
+
+  - id: op-03
+    story: operating_profit_miss_q2_2026
+    speaker: cfo
+    register: formal
+    question: "Please explain the Q2 2026 operating profit variance against the FY26 Operating Plan."
+    split: dev
+    expect:
+      metric: operating_profit
+      comparison: budget
+      window: 2026-Q2
+      intent: why_change
+
+  - id: op-04
+    story: operating_profit_miss_q2_2026
+    speaker: cfo
+    register: terse
+    question: "Operating profit vs plan last quarter: what explains the gap?"
+    split: dev
+    expect:
+      metric: operating_profit
+      comparison: budget
+      window: 2026-Q2
+      intent: why_change
+
+  - id: op-05
+    story: operating_profit_miss_q2_2026
+    speaker: ceo
+    register: idiomatic
+    question: "Top line was fine last quarter, bottom line wasn't. Walk me through it."
+    split: holdout
+    expect:
+      metric: operating_profit
+      window: 2026-Q2
+      intent: why_change
+    note: "Bottom line is a glossary synonym of operating profit. 'Fine' and 'wasn't' do not say against what (plan or last year), so no comparison or premise is asserted; a human would assume plan but could ask."
+
+  - id: op-06
+    story: operating_profit_miss_q2_2026
+    speaker: ceo
+    register: casual
+    question: "Revenue hit plan in Q2 but operating income came in way under. Why?"
+    split: dev
+    expect:
+      metric: operating_profit
+      comparison: budget
+      window: 2026-Q2
+      premises:
+        - {metric: revenue, expectation: meets_plan}
+      intent: why_change
+
+  - id: op-07
+    story: operating_profit_miss_q2_2026
+    speaker: cfo
+    register: terse
+    question: "Bridge Q2 operating profit actual to plan."
+    split: dev
+    expect:
+      metric: operating_profit
+      comparison: budget
+      window: 2026-Q2
+
+  - id: op-08
+    story: operating_profit_miss_q2_2026
+    speaker: cfo
+    register: terse
+    question: "Q2 operating profit vs AOP, what drove the miss?"
+    split: holdout
+    expect:
+      metric: operating_profit
+      comparison: budget
+      window: 2026-Q2
+      intent: why_change
+    note: "AOP is a glossary synonym of the Operating Plan."
+
+  - id: op-09
+    story: operating_profit_miss_q2_2026
+    speaker: analyst
+    register: formal
+    question: "Decompose the Q2 2026 operating profit variance to plan into gross margin and operating expenses."
+    split: dev
+    expect:
+      metric: operating_profit
+      comparison: budget
+      window: 2026-Q2
+
+  - id: op-10
+    story: operating_profit_miss_q2_2026
+    speaker: cfo
+    register: formal
+    question: "Why was gross margin below plan in Q2 2026?"
+    split: dev
+    expect:
+      metric: gross_margin
+      comparison: budget
+      window: 2026-Q2
+      intent: why_change
+
+  - id: op-11
+    story: operating_profit_miss_q2_2026
+    speaker: cfo
+    register: casual
+    question: "How far over plan was freight in Q2, and why?"
+    split: holdout
+    expect:
+      metric: freight_cost
+      comparison: budget
+      window: 2026-Q2
+
+  - id: op-12
+    story: operating_profit_miss_q2_2026
+    speaker: ops
+    register: idiomatic
+    question: "Freight blew through budget last quarter. What's going on?"
+    split: dev
+    expect:
+      metric: freight_cost
+      comparison: budget
+      window: 2026-Q2
+      premises:
+        - {metric: freight_cost, expectation: misses_plan}
+      intent: why_change
+    note: "'Blew through budget' states that freight ran over plan; for a cost line that is misses_plan."
+
+  - id: op-13
+    story: operating_profit_miss_q2_2026
+    speaker: ops
+    register: casual
+    question: "Was the fuel surcharge the reason freight was over plan in Q2?"
+    split: dev
+    expect:
+      metric_any_of: [freight_cost, fuel_surcharge]
+      comparison: budget
+      window: 2026-Q2
+      premises:
+        - {metric: freight_cost, expectation: misses_plan}
+    note: "The subject is the freight overrun and the fuel surcharge is the hypothesis, but an analyst who ran the surcharge against plan directly would also answer the question."
+
+  - id: op-14
+    story: operating_profit_miss_q2_2026
+    speaker: ops
+    register: casual
+    question: "Why is overtime so far above plan this year?"
+    split: holdout
+    expect:
+      metric: overtime
+      comparison: budget
+      window: 2026
+      premises:
+        - {metric: overtime, expectation: misses_plan}
+      intent: why_change
+    note: "'This year' is 2026 to date (September is the last month with data)."
+
+  - id: op-15
+    story: operating_profit_miss_q2_2026
+    speaker: ops
+    register: terse
+    question: "Overtime vs plan Q2 by branch"
+    split: dev
+    expect:
+      metric: overtime
+      comparison: budget
+      window: 2026-Q2
+      breakdown: [branch]
+
+  - id: op-16
+    story: operating_profit_miss_q2_2026
+    speaker: cfo
+    register: casual
+    question: "Which branches drove the labor cost overrun last quarter?"
+    split: dev
+    expect:
+      metric: labor_cost
+      comparison: budget
+      window: 2026-Q2
+      breakdown: [branch]
+      premises:
+        - {metric: labor_cost, expectation: misses_plan}
+
+  - id: op-17
+    story: operating_profit_miss_q2_2026
+    speaker: ceo
+    register: casual
+    question: "Are we understaffed? Headcount looks below plan in Austin and San Antonio."
+    split: holdout
+    expect:
+      metric: headcount
+      comparison: budget
+      filters:
+        branch: [Austin, San Antonio]
+    note: "No period is named; the reader would take the latest closed months. Headcount is a level (average over a period, never a sum)."
+
+  - id: op-18
+    story: operating_profit_miss_q2_2026
+    speaker: cfo
+    register: formal
+    question: "Why did COGS come in above plan in Q2 2026 when revenue was on plan?"
+    split: dev
+    expect:
+      metric: cogs
+      comparison: budget
+      window: 2026-Q2
+      premises:
+        - {metric: revenue, expectation: meets_plan}
+      intent: why_change
+
+  - id: op-19
+    story: operating_profit_miss_q2_2026
+    speaker: analyst
+    register: formal
+    question: "Unit cost vs plan for Lumber in Q2 2026, by supplier."
+    split: dev
+    expect:
+      metric_any_of: [cost_to_list_ratio, standard_unit_cost]
+      comparison: budget
+      window: 2026-Q2
+      filters:
+        category: Lumber
+      breakdown: [supplier]
+    note: "The glossary maps 'unit cost' to COGS per list dollar (the only unit-cost measure with a plan); standard unit cost is the literal reading. 'Mill' and 'vendor' are supplier synonyms."
+
+  - id: op-20
+    story: operating_profit_miss_q2_2026
+    speaker: ceo
+    register: casual
+    question: "Did the Gulf States price hike hurt us last quarter?"
+    split: holdout
+    expect:
+      window: 2026-Q2
+      filters:
+        supplier: Gulf States Forest Products
+    note: "'Hurt us' names no metric; a human would ask or default to gross margin. Only the supplier filter and the window are asserted. 'Gulf States' is a partial supplier name."
+
+  - id: op-21
+    story: operating_profit_miss_q2_2026
+    speaker: sales
+    register: casual
+    question: "Contractor discounting was way over plan in Q2. Which region?"
+    split: dev
+    expect:
+      metric: discount_rate
+      comparison: budget
+      window: 2026-Q2
+      filters:
+        segment: Contractor
+      breakdown: [region]
+      premises:
+        - {metric: discount_rate, expectation: misses_plan}
+    note: "'Discounting' is a glossary synonym of discount rate; discount dollars (discount_amount) would be a defensible reading too."
+
+  - id: op-22
+    story: operating_profit_miss_q2_2026
+    speaker: cfo
+    register: terse
+    question: "Discount rate vs plan by segment, Q2 2026."
+    split: dev
+    expect:
+      metric: discount_rate
+      comparison: budget
+      window: 2026-Q2
+      breakdown: [segment]
+
+  - id: op-23
+    story: operating_profit_miss_q2_2026
+    speaker: ceo
+    register: idiomatic
+    question: "Where did the profit go last quarter? Sales were fine."
+    split: holdout
+    expect:
+      ambiguous_among: [gross_margin, operating_profit]
+      window: 2026-Q2
+    note: "Bare 'profit' could be gross profit or operating profit; a human asks. 'Sales were fine' is too vague to assert a premise."
+
+  - id: op-24
+    story: operating_profit_miss_q2_2026
+    speaker: cfo
+    register: formal
+    question: "For Q2 2026, quantify the operating expense variance to plan by line item."
+    split: dev
+    expect:
+      metric: operating_expenses
+      comparison: budget
+      window: 2026-Q2
+
+  - id: op-25
+    story: operating_profit_miss_q2_2026
+    speaker: ops
+    register: terse
+    question: "Base freight vs plan last quarter"
+    split: dev
+    expect:
+      metric: base_freight
+      comparison: budget
+      window: 2026-Q2
+
+  - id: op-26
+    story: operating_profit_miss_q2_2026
+    speaker: ops
+    register: casual
+    question: "Did delivery volume run ahead of plan in Q2?"
+    split: holdout
+    expect:
+      metric: deliveries
+      comparison: budget
+      window: 2026-Q2
+
+  - id: op-27
+    story: operating_profit_miss_q2_2026
+    speaker: sales
+    register: idiomatic
+    question: "We hit quota last quarter. Why is finance saying we missed?"
+    split: dev
+    expect:
+      ambiguous_among: [operating_profit, gross_margin]
+      window: 2026-Q2
+      premises:
+        - {metric: revenue, expectation: meets_plan}
+    note: "'Missed' has no subject; the right move is to ask what was missed. The candidate list is a judgement: the profit lines are what finance would be talking about."
+
+  - id: op-28
+    story: operating_profit_miss_q2_2026
+    speaker: analyst
+    register: terse
+    question: "Operating margin % actual vs plan for Q2 2026."
+    split: holdout
+    expect:
+      metric: operating_margin_pct
+      comparison: budget
+      window: 2026-Q2
+
+  - id: op-29
+    story: operating_profit_miss_q2_2026
+    speaker: ceo
+    register: casual
+    question: "Payroll was under plan last quarter, so why is labor over?"
+    split: dev
+    expect:
+      metric: labor_cost
+      comparison: budget
+      window: 2026-Q2
+      premises:
+        - {metric: payroll, expectation: meets_plan}
+        - {metric: labor_cost, expectation: misses_plan}
+      intent: why_change
+    note: "Payroll under plan is favourable for a cost line, hence meets_plan."
+
+  - id: op-30
+    story: operating_profit_miss_q2_2026
+    speaker: ops
+    register: terse
+    question: "Compare Q2 2026 headcount to the plan by branch."
+    split: dev
+    expect:
+      metric: headcount
+      comparison: budget
+      window: 2026-Q2
+      breakdown: [branch]
+
+  - id: op-31
+    story: operating_profit_miss_q2_2026
+    speaker: ops
+    register: terse
+    question: "Labor is over. Which branch?"
+    split: holdout
+    expect:
+      metric: labor_cost
+      comparison: budget
+      breakdown: [branch]
+      premises:
+        - {metric: labor_cost, expectation: misses_plan}
+    note: "'Over' with no yardstick means over plan to an ops leader. No period is named."
+
+  - id: op-32
+    story: operating_profit_miss_q2_2026
+    speaker: cfo
+    register: casual
+    question: "Revenue landed on plan in Q2, but was that true for every segment?"
+    split: dev
+    expect:
+      metric: revenue
+      comparison: budget
+      window: 2026-Q2
+      breakdown: [segment]
+      premises:
+        - {metric: revenue, expectation: meets_plan}
+
+  # --------------------------------------------------------------------------
+  # Story 1: August 2026 revenue decline vs July 2026
+  # --------------------------------------------------------------------------
+
+  - id: aug-01
+    story: revenue_decline_aug_2026
+    speaker: ceo
+    register: casual
+    question: "Why was August revenue down?"
+    split: dev
+    expect:
+      metric: revenue
+      comparison: pop
+      window: 2026-08
+      baseline: 2026-07
+      premises:
+        - {metric: revenue, expectation: down}
+      intent: why_change
+    note: "No baseline is named. Month over month (July) is the default reading for a monthly question; a year-over-year reading is defensible, so pop is a judgement call."
+
+  - id: aug-02
+    story: revenue_decline_aug_2026
+    speaker: ceo
+    register: terse
+    question: "August revenue. What happened?"
+    split: holdout
+    expect:
+      metric: revenue
+      window: 2026-08
+    note: "Neither direction nor baseline is stated."
+
+  - id: aug-03
+    story: revenue_decline_aug_2026
+    speaker: cfo
+    register: formal
+    question: "Revenue fell 12% from July to August. Break it down."
+    split: dev
+    expect:
+      metric: revenue
+      comparison: pop
+      window: 2026-08
+      baseline: 2026-07
+      premises:
+        - {metric: revenue, expectation: down}
+
+  - id: aug-04
+    story: revenue_decline_aug_2026
+    speaker: sales
+    register: casual
+    question: "Sales dropped last month. Which region?"
+    split: dev
+    expect:
+      metric: revenue
+      window: 2026-08
+      breakdown: [region]
+      premises:
+        - {metric: revenue, expectation: down}
+    note: "'Sales' means revenue in the glossary. Baseline unstated; July is the natural reading but is not asserted."
+
+  - id: aug-05
+    story: revenue_decline_aug_2026
+    speaker: sales
+    register: casual
+    question: "Which customers pulled back in August?"
+    split: holdout
+    expect:
+      metric: revenue
+      window: 2026-08
+      breakdown: [customer]
+    note: "'Pulled back' implies a decline in what they bought; revenue is the natural measure, orders would also be defensible."
+
+  - id: aug-06
+    story: revenue_decline_aug_2026
+    speaker: ceo
+    register: idiomatic
+    question: "What is going on in Dallas? August looked awful."
+    split: dev
+    expect:
+      window: 2026-08
+      filters:
+        branch: Dallas
+    note: "No metric is named. A CEO means sales, but a human would either assume revenue or ask; only the branch filter and month are asserted."
+
+  - id: aug-07
+    story: revenue_decline_aug_2026
+    speaker: analyst
+    register: formal
+    question: "Revenue for the Dallas branch, August 2026 vs July 2026."
+    split: dev
+    expect:
+      metric: revenue
+      comparison: pop
+      window: 2026-08
+      baseline: 2026-07
+      filters:
+        branch: Dallas
+      intent: compare
+
+  - id: aug-08
+    story: revenue_decline_aug_2026
+    speaker: sales
+    register: casual
+    question: "Trinity Ridge basically stopped ordering in August. How much did that cost us?"
+    split: holdout
+    expect:
+      metric: revenue
+      window: 2026-08
+      filters:
+        customer: Trinity Ridge Construction
+      premises:
+        - {metric: revenue, expectation: down}
+    note: "'Trinity Ridge' is a partial customer name; there is one matching customer. The comparison month is unstated (July is the natural reading)."
+
+  - id: aug-09
+    story: revenue_decline_aug_2026
+    speaker: cfo
+    register: formal
+    question: "Month-over-month revenue decline for August 2026: decompose into order count and average order value."
+    split: dev
+    expect:
+      metric: revenue
+      comparison: pop
+      window: 2026-08
+      baseline: 2026-07
+      premises:
+        - {metric: revenue, expectation: down}
+
+  - id: aug-10
+    story: revenue_decline_aug_2026
+    speaker: analyst
+    register: terse
+    question: "Was the August decline orders or AOV?"
+    split: dev
+    expect:
+      metric: revenue
+      window: 2026-08
+      premises:
+        - {metric: revenue, expectation: down}
+    note: "The subject is revenue (orders x AOV are its drivers); the decline is taken as given."
+
+  - id: aug-11
+    story: revenue_decline_aug_2026
+    speaker: sales
+    register: idiomatic
+    question: "Did the August promo eat our price? ASP by tier, July vs August."
+    split: holdout
+    expect:
+      metric: asp
+      comparison: pop
+      window: 2026-08
+      baseline: 2026-07
+      breakdown: [product_tier]
+
+  - id: aug-12
+    story: revenue_decline_aug_2026
+    speaker: cfo
+    register: terse
+    question: "Discount rate July vs August 2026."
+    split: dev
+    expect:
+      metric: discount_rate
+      comparison: pop
+      window: 2026-08
+      baseline: 2026-07
+      intent: compare
+    note: "Order of mention is July then August; the later month is the current side."
+
+  - id: aug-13
+    story: revenue_decline_aug_2026
+    speaker: ceo
+    register: casual
+    question: "Is August revenue down versus last year too?"
+    split: dev
+    expect:
+      metric: revenue
+      comparison: yoy
+      window: 2026-08
+      baseline: 2025-08
+
+  - id: aug-14
+    story: revenue_decline_aug_2026
+    speaker: analyst
+    register: terse
+    question: "Revenue August 2026 vs August 2025."
+    split: holdout
+    expect:
+      metric: revenue
+      comparison: yoy
+      window: 2026-08
+      baseline: 2025-08
+      intent: compare
+
+  - id: aug-15
+    story: revenue_decline_aug_2026
+    speaker: ops
+    register: idiomatic
+    question: "North Texas orders fell off a cliff in August. Why?"
+    split: dev
+    expect:
+      metric: orders
+      window: 2026-08
+      filters:
+        region: North Texas
+      premises:
+        - {metric: orders, expectation: down}
+      intent: why_change
+
+  - id: aug-16
+    story: revenue_decline_aug_2026
+    speaker: sales
+    register: casual
+    question: "Which product categories held up in August?"
+    split: dev
+    expect:
+      metric: revenue
+      window: 2026-08
+      breakdown: [category]
+    note: "'Held up' means grew or declined least against the prior month; revenue is the natural measure for a sales leader."
+
+  - id: aug-17
+    story: revenue_decline_aug_2026
+    speaker: cfo
+    register: casual
+    question: "Insulation grew in August while everything else fell. Is that a mix story?"
+    split: holdout
+    expect:
+      metric: revenue
+      window: 2026-08
+      filters:
+        category: Insulation
+    note: "The premise (Insulation up) is scoped by the category filter and is not asserted as a premise field."
+
+  - id: aug-18
+    story: revenue_decline_aug_2026
+    speaker: ceo
+    register: casual
+    question: "How much of August's revenue drop is one customer?"
+    split: dev
+    expect:
+      metric: revenue
+      window: 2026-08
+      breakdown: [customer]
+      premises:
+        - {metric: revenue, expectation: down}
+
+  - id: aug-19
+    story: revenue_decline_aug_2026
+    speaker: analyst
+    register: terse
+    question: "Entry tier share of units, July vs August 2026."
+    split: dev
+    expect:
+      metric: units
+      comparison: pop
+      window: 2026-08
+      baseline: 2026-07
+      breakdown: [product_tier]
+    note: "A share of units by tier is a units breakdown; the Entry filter is a focus, not a restriction, so it is not asserted as a filter."
+
+  - id: aug-20
+    story: revenue_decline_aug_2026
+    speaker: sales
+    register: casual
+    question: "Why did Dallas order count drop by a fifth in August?"
+    split: holdout
+    expect:
+      metric: orders
+      window: 2026-08
+      filters:
+        branch: Dallas
+      premises:
+        - {metric: orders, expectation: down}
+      intent: why_change
+
+  - id: aug-21
+    story: revenue_decline_aug_2026
+    speaker: cfo
+    register: terse
+    question: "Aug vs Jul revenue by branch."
+    split: dev
+    expect:
+      metric: revenue
+      comparison: pop
+      window: 2026-08
+      baseline: 2026-07
+      breakdown: [branch]
+
+  - id: aug-22
+    story: revenue_decline_aug_2026
+    speaker: ops
+    register: terse
+    question: "Deliveries in August vs July"
+    split: dev
+    expect:
+      metric: deliveries
+      comparison: pop
+      window: 2026-08
+      baseline: 2026-07
+
+  - id: aug-23
+    story: revenue_decline_aug_2026
+    speaker: cfo
+    register: casual
+    question: "What happened to gross margin % in August? It fell with revenue."
+    split: holdout
+    expect:
+      metric: gross_margin_pct
+      window: 2026-08
+      premises:
+        - {metric: gross_margin_pct, expectation: down}
+        - {metric: revenue, expectation: down}
+      intent: why_change
+
+  - id: aug-24
+    story: revenue_decline_aug_2026
+    speaker: ceo
+    register: casual
+    question: "Revenue last month vs the month before, and why."
+    split: dev
+    expect:
+      metric: revenue
+      comparison: pop
+      window: 2026-08
+      baseline: 2026-07
+      intent: why_change
+
+  - id: aug-25
+    story: revenue_decline_aug_2026
+    speaker: analyst
+    register: formal
+    question: "Which branch contributed most to the August 2026 month-over-month revenue decline?"
+    split: dev
+    expect:
+      metric: revenue
+      comparison: pop
+      window: 2026-08
+      baseline: 2026-07
+      breakdown: [branch]
+      premises:
+        - {metric: revenue, expectation: down}
+
+  - id: aug-26
+    story: revenue_decline_aug_2026
+    speaker: sales
+    register: casual
+    question: "Is September recovering from August?"
+    split: holdout
+    expect:
+      metric: revenue
+      comparison: pop
+      window: 2026-09
+      baseline: 2026-08
+    note: "Metric unstated; a sales leader means revenue, so this is a judgement call. September is the current, unclosed month."
+
+  - id: aug-27
+    story: revenue_decline_aug_2026
+    speaker: sales
+    register: terse
+    question: "Active customers in August 2026 compared with July."
+    split: dev
+    expect:
+      metric: active_customers
+      comparison: pop
+      window: 2026-08
+      baseline: 2026-07
+      intent: compare
+
+  - id: aug-28
+    story: revenue_decline_aug_2026
+    speaker: ceo
+    register: idiomatic
+    question: "Did we just have a bad month, or is something broken? Look at August."
+    split: dev
+    expect:
+      window: 2026-08
+    note: "No metric; a human would ask or default to revenue. Only the month is asserted."
+
+  # --------------------------------------------------------------------------
+  # Story 2: Q2 2026 gross margin % vs Q2 2025, with a genuinely ambiguous "margin"
+  # --------------------------------------------------------------------------
+
+  - id: gm-01
+    story: margin_compression_q2_2026
+    speaker: ceo
+    register: formal
+    question: "Revenue was roughly flat in Q2 2026 versus Q2 2025. Why did margin decline?"
+    split: dev
+    expect:
+      ambiguous_among: [gross_margin, gross_margin_pct, contribution_margin, operating_profit]
+      comparison: yoy
+      window: 2026-Q2
+      baseline: 2025-Q2
+      premises:
+        - {metric: revenue, expectation: flat}
+    note: "The glossary lists four margin measures for bare 'margin' and says to ask."
+
+  - id: gm-02
+    story: margin_compression_q2_2026
+    speaker: cfo
+    register: formal
+    question: "Why did gross margin % fall in Q2 2026 vs Q2 2025 while revenue held flat?"
+    split: holdout
+    expect:
+      metric: gross_margin_pct
+      comparison: yoy
+      window: 2026-Q2
+      baseline: 2025-Q2
+      premises:
+        - {metric: revenue, expectation: flat}
+      intent: why_change
+
+  - id: gm-03
+    story: margin_compression_q2_2026
+    speaker: ceo
+    register: idiomatic
+    question: "Sales are flat year on year but we're making less on every dollar. Why?"
+    split: dev
+    expect:
+      ambiguous_among: [gross_margin_pct, contribution_margin_pct, operating_margin_pct]
+      comparison: yoy
+      premises:
+        - {metric: revenue, expectation: flat}
+    note: "'Less on every dollar' is a margin rate, but which one is unstated; a human asks. No period is named."
+
+  - id: gm-04
+    story: margin_compression_q2_2026
+    speaker: cfo
+    register: terse
+    question: "GM% Q2 2026 vs Q2 2025, by category."
+    split: dev
+    expect:
+      metric: gross_margin_pct
+      comparison: yoy
+      window: 2026-Q2
+      baseline: 2025-Q2
+      breakdown: [category]
+
+  - id: gm-05
+    story: margin_compression_q2_2026
+    speaker: cfo
+    register: casual
+    question: "Is the margin compression cost inflation or discounting?"
+    split: holdout
+    expect:
+      ambiguous_among: [gross_margin, gross_margin_pct, contribution_margin, operating_profit]
+    note: "Finance would usually mean gross margin %, but the glossary says bare 'margin' must be clarified. No period is named."
+
+  - id: gm-06
+    story: margin_compression_q2_2026
+    speaker: analyst
+    register: formal
+    question: "Gross margin rate by category, Q2 2026 vs prior year."
+    split: dev
+    expect:
+      metric: gross_margin_pct
+      comparison: yoy
+      window: 2026-Q2
+      baseline: 2025-Q2
+      breakdown: [category]
+
+  - id: gm-07
+    story: margin_compression_q2_2026
+    speaker: ops
+    register: casual
+    question: "Lumber margin is down. Is it Gulf States?"
+    split: dev
+    expect:
+      ambiguous_among: [gross_margin, gross_margin_pct, contribution_margin, operating_profit]
+      filters:
+        category: Lumber
+    note: "Bare 'margin' again. The supplier is a hypothesis, not a filter on the subject."
+
+  - id: gm-08
+    story: margin_compression_q2_2026
+    speaker: cfo
+    register: casual
+    question: "Why did Lumber gross margin % drop so much year over year in Q2?"
+    split: holdout
+    expect:
+      metric: gross_margin_pct
+      comparison: yoy
+      window: 2026-Q2
+      baseline: 2025-Q2
+      filters:
+        category: Lumber
+      premises:
+        - {metric: gross_margin_pct, expectation: down}
+      intent: why_change
+
+  - id: gm-09
+    story: margin_compression_q2_2026
+    speaker: sales
+    register: terse
+    question: "Contractor discount rate Q2 this year vs Q2 last year."
+    split: dev
+    expect:
+      metric: discount_rate
+      comparison: yoy
+      window: 2026-Q2
+      baseline: 2025-Q2
+      filters:
+        segment: Contractor
+      intent: compare
+
+  - id: gm-10
+    story: margin_compression_q2_2026
+    speaker: ceo
+    register: idiomatic
+    question: "Are we giving away margin to contractors in the Gulf Coast?"
+    split: dev
+    expect:
+      filters:
+        segment: Contractor
+        region: Gulf Coast
+    note: "'Giving away margin' is really about discounting, but the word is 'margin'; asking (four candidates) or reading it as discount rate are both defensible, so no metric is asserted."
+
+  - id: gm-11
+    story: margin_compression_q2_2026
+    speaker: analyst
+    register: formal
+    question: "Unit cost change by category, Q2 2026 vs Q2 2025."
+    split: holdout
+    expect:
+      metric_any_of: [cost_to_list_ratio, standard_unit_cost]
+      comparison: yoy
+      window: 2026-Q2
+      baseline: 2025-Q2
+      breakdown: [category]
+    note: "The glossary maps 'unit cost' to COGS per list dollar; the literal reading is the recorded standard unit cost."
+
+  - id: gm-12
+    story: margin_compression_q2_2026
+    speaker: cfo
+    register: formal
+    question: "Attribute the year-over-year change in Q2 2026 gross margin percentage to unit cost, discounting and mix."
+    split: dev
+    expect:
+      metric: gross_margin_pct
+      comparison: yoy
+      window: 2026-Q2
+      baseline: 2025-Q2
+
+  - id: gm-13
+    story: margin_compression_q2_2026
+    speaker: ceo
+    register: terse
+    question: "Q2 margins?"
+    split: dev
+    expect:
+      ambiguous_among: [gross_margin, gross_margin_pct, contribution_margin, operating_profit]
+      window: 2026-Q2
+
+  - id: gm-14
+    story: margin_compression_q2_2026
+    speaker: cfo
+    register: terse
+    question: "Gross profit Q2 2026 vs Q2 2025"
+    split: holdout
+    expect:
+      metric: gross_margin
+      comparison: yoy
+      window: 2026-Q2
+      baseline: 2025-Q2
+      intent: compare
+
+  - id: gm-15
+    story: margin_compression_q2_2026
+    speaker: ops
+    register: casual
+    question: "Roofing costs went up in March. How much did that cost us in gross margin in Q2 vs last year?"
+    split: dev
+    expect:
+      metric: gross_margin
+      comparison: yoy
+      window: 2026-Q2
+      baseline: 2025-Q2
+      filters:
+        category: Roofing
+
+  - id: gm-16
+    story: margin_compression_q2_2026
+    speaker: analyst
+    register: terse
+    question: "Contribution margin % Q2 2026 versus Q2 2025."
+    split: dev
+    expect:
+      metric: contribution_margin_pct
+      comparison: yoy
+      window: 2026-Q2
+      baseline: 2025-Q2
+      intent: compare
+
+  - id: gm-17
+    story: margin_compression_q2_2026
+    speaker: ceo
+    register: idiomatic
+    question: "We sold the same amount as last year but kept less of it. Where did it go?"
+    split: holdout
+    expect:
+      ambiguous_among: [gross_margin, gross_margin_pct, contribution_margin, operating_profit]
+      comparison: yoy
+      premises:
+        - {metric: revenue, expectation: flat}
+    note: "'Kept less of it' is a margin in some form; which one needs asking. No period is named."
+
+  - id: gm-18
+    story: margin_compression_q2_2026
+    speaker: cfo
+    register: casual
+    question: "Why did gross margin dollars fall in Q2 despite flat sales?"
+    split: dev
+    expect:
+      metric: gross_margin
+      window: 2026-Q2
+      premises:
+        - {metric: revenue, expectation: flat}
+        - {metric: gross_margin, expectation: down}
+      intent: why_change
+    note: "The baseline is unstated: prior year is the usual reading for a quarter, but prior quarter or plan are defensible, so no comparison is asserted."
+
+  - id: gm-19
+    story: margin_compression_q2_2026
+    speaker: analyst
+    register: formal
+    question: "Discount rate by segment and region, Q2 2026 vs Q2 2025."
+    split: dev
+    expect:
+      metric: discount_rate
+      comparison: yoy
+      window: 2026-Q2
+      baseline: 2025-Q2
+      breakdown: [segment, region]
+
+  - id: gm-20
+    story: margin_compression_q2_2026
+    speaker: ops
+    register: casual
+    question: "Which supplier's cost increase hit Q2 gross margin hardest year over year?"
+    split: holdout
+    expect:
+      metric: gross_margin
+      comparison: yoy
+      window: 2026-Q2
+      baseline: 2025-Q2
+      breakdown: [supplier]
+
+  - id: gm-21
+    story: margin_compression_q2_2026
+    speaker: ceo
+    register: idiomatic
+    question: "Is Contractor pricing the margin problem, or is it the mills?"
+    split: dev
+    expect:
+      ambiguous_among: [gross_margin, gross_margin_pct, contribution_margin, operating_profit]
+    note: "Bare 'margin'. Contractor pricing and the mills (suppliers) are hypotheses, not filters."
+
+  - id: gm-22
+    story: margin_compression_q2_2026
+    speaker: sales
+    register: casual
+    question: "Enterprise margin held up but Contractor didn't. Why?"
+    split: dev
+    expect:
+      ambiguous_among: [gross_margin, gross_margin_pct, contribution_margin, operating_profit]
+    note: "Bare 'margin'; the segments are a contrast the analyst would explore after clarifying, not filters on the subject."
+
+  # --------------------------------------------------------------------------
+  # Story 3: Q2 2026 vs Q1 2026 lead conversion decline
+  # --------------------------------------------------------------------------
+
+  - id: conv-01
+    story: conversion_decline_q2_2026
+    speaker: sales
+    register: formal
+    question: "Why did conversion rate decline in Q2 2026?"
+    split: dev
+    expect:
+      metric: conversion_rate
+      window: 2026-Q2
+      premises:
+        - {metric: conversion_rate, expectation: down}
+      intent: why_change
+    note: "Baseline unstated; the prior quarter is the natural reading for a lead cohort question but is not asserted."
+
+  - id: conv-02
+    story: conversion_decline_q2_2026
+    speaker: sales
+    register: casual
+    question: "Lead volume was stable but conversion fell. Where?"
+    split: holdout
+    expect:
+      metric: conversion_rate
+      premises:
+        - {metric: leads, expectation: flat}
+        - {metric: conversion_rate, expectation: down}
+    note: "No period is named; the analyst would pick the most recent mature cohort comparison."
+
+  - id: conv-03
+    story: conversion_decline_q2_2026
+    speaker: ceo
+    register: casual
+    question: "Are we converting fewer leads than we were at the start of the year?"
+    split: dev
+    expect:
+      metric: conversion_rate
+      comparison: pop
+      baseline: 2026-Q1
+    note: "'Start of the year' is Q1 2026. The current window is unstated (Q2 is the latest mature cohort); asserting only the baseline. Converted-lead count would also be a defensible reading."
+
+  - id: conv-04
+    story: conversion_decline_q2_2026
+    speaker: sales
+    register: terse
+    question: "Q2 vs Q1 lead conversion by region"
+    split: dev
+    expect:
+      metric: conversion_rate
+      comparison: pop
+      window: 2026-Q2
+      baseline: 2026-Q1
+      breakdown: [region]
+
+  - id: conv-05
+    story: conversion_decline_q2_2026
+    speaker: sales
+    register: casual
+    question: "Gulf Coast conversion has fallen off. Which channel?"
+    split: holdout
+    expect:
+      metric: conversion_rate
+      filters:
+        region: Gulf Coast
+      breakdown: [lead_channel]
+      premises:
+        - {metric: conversion_rate, expectation: down}
+    note: "'Channel' for leads is the lead channel, not the order channel."
+
+  - id: conv-06
+    story: conversion_decline_q2_2026
+    speaker: ops
+    register: casual
+    question: "Why are paid search leads in the Gulf Coast not converting anymore?"
+    split: dev
+    expect:
+      metric: conversion_rate
+      filters:
+        region: Gulf Coast
+        lead_channel: Paid Search
+      premises:
+        - {metric: conversion_rate, expectation: down}
+      intent: why_change
+
+  - id: conv-07
+    story: conversion_decline_q2_2026
+    speaker: analyst
+    register: formal
+    question: "Median first response time for Gulf Coast paid-search leads, Q2 2026 vs Q1 2026."
+    split: dev
+    expect:
+      metric: median_first_response_hours
+      comparison: pop
+      window: 2026-Q2
+      baseline: 2026-Q1
+      filters:
+        region: Gulf Coast
+        lead_channel: Paid Search
+      intent: compare
+
+  - id: conv-08
+    story: conversion_decline_q2_2026
+    speaker: sales
+    register: casual
+    question: "Is speed to lead the reason Q2 conversion dropped?"
+    split: holdout
+    expect:
+      metric: conversion_rate
+      window: 2026-Q2
+      premises:
+        - {metric: conversion_rate, expectation: down}
+    note: "Speed to lead (first response time) is the hypothesis; the subject is conversion."
+
+  - id: conv-09
+    story: conversion_decline_q2_2026
+    speaker: ceo
+    register: casual
+    question: "Our win rate went down last quarter. Why?"
+    split: dev
+    expect:
+      metric: conversion_rate
+      window: 2026-Q2
+      premises:
+        - {metric: conversion_rate, expectation: down}
+      intent: why_change
+    note: "'Win rate' is a governed synonym of conversion rate. In a sales-pipeline sense it could mean opportunity win rate, which is not governed; the synonym settles it here."
+
+  - id: conv-10
+    story: conversion_decline_q2_2026
+    speaker: sales
+    register: casual
+    question: "How many leads did we get in Q2 2026 vs Q1?"
+    split: dev
+    expect:
+      metric: leads
+      comparison: pop
+      window: 2026-Q2
+      baseline: 2026-Q1
+      intent: compare
+
+  - id: conv-11
+    story: conversion_decline_q2_2026
+    speaker: analyst
+    register: terse
+    question: "Conversion rate by lead channel, Q2 2026 lead cohort."
+    split: holdout
+    expect:
+      metric: conversion_rate
+      window: 2026-Q2
+      breakdown: [lead_channel]
+
+  - id: conv-12
+    story: conversion_decline_q2_2026
+    speaker: sales
+    register: idiomatic
+    question: "Marketing says lead flow is fine. So why is the funnel leaking in Q2?"
+    split: dev
+    expect:
+      metric: conversion_rate
+      window: 2026-Q2
+      premises:
+        - {metric: leads, expectation: flat}
+    note: "'Funnel leaking' with stable lead flow is a conversion problem; a judgement call on idiom."
+
+  - id: conv-13
+    story: conversion_decline_q2_2026
+    speaker: sales
+    register: terse
+    question: "Converted leads Q2 2026 vs Q1 2026, Gulf Coast only."
+    split: dev
+    expect:
+      metric: converted_leads
+      comparison: pop
+      window: 2026-Q2
+      baseline: 2026-Q1
+      filters:
+        region: Gulf Coast
+
+  - id: conv-14
+    story: conversion_decline_q2_2026
+    speaker: analyst
+    register: formal
+    question: "Conversion rate for Paid Search leads, Q2 2026 versus Q1 2026."
+    split: holdout
+    expect:
+      metric: conversion_rate
+      comparison: pop
+      window: 2026-Q2
+      baseline: 2026-Q1
+      filters:
+        lead_channel: Paid Search
+
+  - id: conv-15
+    story: conversion_decline_q2_2026
+    speaker: sales
+    register: casual
+    question: "Which region and channel explains most of the Q2 conversion decline?"
+    split: dev
+    expect:
+      metric: conversion_rate
+      window: 2026-Q2
+      breakdown: [region, lead_channel]
+      premises:
+        - {metric: conversion_rate, expectation: down}
+
+  - id: conv-16
+    story: conversion_decline_q2_2026
+    speaker: ops
+    register: casual
+    question: "Response time on leads got really slow in Houston's region last quarter. Show me."
+    split: dev
+    expect:
+      metric: median_first_response_hours
+      window: 2026-Q2
+      filters:
+        region: Gulf Coast
+    note: "'Houston's region' is Gulf Coast; a human resolves it through the branch. An interpreter that resolves branch = Houston instead has read the words, not the intent."
+
+  - id: conv-17
+    story: conversion_decline_q2_2026
+    speaker: sales
+    register: casual
+    question: "Conversion rate trend by quarter since the start of 2025."
+    split: holdout
+    expect:
+      metric: conversion_rate
+      window: 2025-01..2026-09
+      intent: trend
+    note: "The Q3 2026 cohort is immature at the reference date; a good answer says so."
+
+  - id: conv-18
+    story: conversion_decline_q2_2026
+    speaker: sales
+    register: terse
+    question: "Q2 conversion by segment"
+    split: dev
+    expect:
+      metric: conversion_rate
+      window: 2026-Q2
+      breakdown: [segment]
+
+  - id: conv-19
+    story: conversion_decline_q2_2026
+    speaker: ceo
+    register: casual
+    question: "Did the CRM change in the spring hurt our conversion?"
+    split: dev
+    expect:
+      metric: conversion_rate
+    note: "'The spring' is roughly Q2 2026 but is not a governed period; no window is asserted."
+
+  # --------------------------------------------------------------------------
+  # Story 4: inventory June 2026 vs June 2025, and inventory health
+  # --------------------------------------------------------------------------
+
+  - id: inv-01
+    story: inventory_buildup_2026
+    speaker: ops
+    register: formal
+    question: "Why did inventory value increase in June 2026 compared with June 2025?"
+    split: dev
+    expect:
+      metric: inventory_value
+      comparison: yoy
+      window: 2026-06-30
+      baseline: 2025-06-30
+      premises:
+        - {metric: inventory_value, expectation: up}
+      intent: why_change
+    note: "Inventory value is a month-end snapshot; 'June' means the 30 June snapshot, never a sum over the month."
+
+  - id: inv-02
+    story: inventory_buildup_2026
+    speaker: ceo
+    register: casual
+    question: "Why is inventory up 30% when sales are flat?"
+    split: holdout
+    expect:
+      metric: inventory_value
+      premises:
+        - {metric: inventory_value, expectation: up}
+        - {metric: revenue, expectation: flat}
+      intent: why_change
+    note: "'Inventory' is a governed synonym of inventory value. No period or baseline is named."
+
+  - id: inv-03
+    story: inventory_buildup_2026
+    speaker: cfo
+    register: formal
+    question: "Inventory at cost, end of June 2026 vs end of June 2025, by category."
+    split: dev
+    expect:
+      metric: inventory_value
+      comparison: yoy
+      window: 2026-06-30
+      baseline: 2025-06-30
+      breakdown: [category]
+
+  - id: inv-04
+    story: inventory_buildup_2026
+    speaker: ops
+    register: casual
+    question: "Which inventory is unhealthy?"
+    split: dev
+    expect:
+      metric_any_of: [days_of_supply, inventory_value]
+    note: "'Unhealthy' inventory is slow-moving stock, which the glossary defines by days of supply; ranking inventory value by product with usage alongside answers it too."
+
+  - id: inv-05
+    story: inventory_buildup_2026
+    speaker: ops
+    register: casual
+    question: "Show me our slow movers."
+    split: holdout
+    expect:
+      metric: days_of_supply
+      breakdown: [product]
+    note: "'Slow mover' is a glossary synonym of Slow-Moving SKU, defined by days of supply. Latest snapshot implied."
+
+  - id: inv-06
+    story: inventory_buildup_2026
+    speaker: ops
+    register: casual
+    question: "Which SKUs have the most days of supply right now?"
+    split: dev
+    expect:
+      metric: days_of_supply
+      breakdown: [sku]
+    note: "'Right now' is the latest month-end snapshot; not asserted as a window because the notation has no 'latest'. Adjudicated: 'SKUs' names the governed sku dimension, so the breakdown is sku (was product)."
+
+  - id: inv-07
+    story: inventory_buildup_2026
+    speaker: cfo
+    register: casual
+    question: "How much cash is tied up in the Summit Select Signature line?"
+    split: dev
+    expect:
+      metric: inventory_value
+      unresolved_filters: ["Summit Select Signature"]
+    note: "'Cash tied up' is inventory value. 'Summit Select Signature' is a product-name prefix (a sub-line of the Premium tier), not a dimension value; the interpreter should surface it rather than silently widen to the Premium tier or drop it."
+
+  - id: inv-08
+    story: inventory_buildup_2026
+    speaker: ops
+    register: terse
+    question: "Days of supply by category at the June 2026 snapshot."
+    split: holdout
+    expect:
+      metric: days_of_supply
+      window: 2026-06-30
+      breakdown: [category]
+
+  - id: inv-09
+    story: inventory_buildup_2026
+    speaker: ceo
+    register: casual
+    question: "Do we have too much stock?"
+    split: dev
+    expect:
+      metric_any_of: [days_of_supply, inventory_value]
+    note: "'Stock' is a governed synonym of inventory value; 'too much' is a days-of-supply judgement. Either is a fair start."
+
+  - id: inv-10
+    story: inventory_buildup_2026
+    speaker: ops
+    register: casual
+    question: "Plumbing inventory doubled year over year. Why?"
+    split: dev
+    expect:
+      metric: inventory_value
+      comparison: yoy
+      filters:
+        category: Plumbing
+      premises:
+        - {metric: inventory_value, expectation: up}
+      intent: why_change
+
+  - id: inv-11
+    story: inventory_buildup_2026
+    speaker: analyst
+    register: formal
+    question: "Inventory value trend by month-end, January 2025 through September 2026."
+    split: holdout
+    expect:
+      metric: inventory_value
+      window: 2025-01..2026-09
+      intent: trend
+
+  - id: inv-12
+    story: inventory_buildup_2026
+    speaker: ops
+    register: terse
+    question: "On-hand units for Tools at Dallas, end of June 2026."
+    split: dev
+    expect:
+      metric: on_hand_units
+      window: 2026-06-30
+      filters:
+        category: Tools
+        branch: Dallas
+      intent: lookup
+
+  - id: inv-13
+    story: inventory_buildup_2026
+    speaker: ops
+    register: idiomatic
+    question: "What's gathering dust in the warehouses?"
+    split: dev
+    expect:
+      metric: days_of_supply
+    note: "'Gathering dust' is dead stock, a glossary synonym of Slow-Moving SKU. A judgement call on idiom."
+
+  - id: inv-14
+    story: inventory_buildup_2026
+    speaker: ops
+    register: terse
+    question: "Dead stock by branch"
+    split: holdout
+    expect:
+      metric: days_of_supply
+      breakdown: [branch]
+    note: "'Dead stock' is a glossary synonym of Slow-Moving SKU."
+
+  - id: inv-15
+    story: inventory_buildup_2026
+    speaker: ceo
+    register: casual
+    question: "Is the premium line we launched last fall actually selling?"
+    split: dev
+    expect:
+      metric: units
+      unresolved_filters: ["the premium line we launched last fall"]
+    note: "The line is the Summit Select Signature products launched 2025-09-15. Product tier = Premium would be too wide (every Summit Select product), so the filter should be surfaced, not guessed. Revenue instead of units would be defensible."
+
+  - id: inv-16
+    story: inventory_buildup_2026
+    speaker: analyst
+    register: terse
+    question: "Inventory value June 2026 vs June 2025 for Electrical."
+    split: dev
+    expect:
+      metric: inventory_value
+      comparison: yoy
+      window: 2026-06-30
+      baseline: 2025-06-30
+      filters:
+        category: Electrical
+      intent: compare
+
+  - id: inv-17
+    story: inventory_buildup_2026
+    speaker: ops
+    register: casual
+    question: "Inventory days for Plumbing, June 2026 vs June 2025."
+    split: holdout
+    expect:
+      metric: days_of_supply
+      comparison: yoy
+      window: 2026-06-30
+      baseline: 2025-06-30
+      filters:
+        category: Plumbing
+
+  - id: inv-18
+    story: inventory_buildup_2026
+    speaker: cfo
+    register: casual
+    question: "Inventory grew faster than sales this year. Which categories?"
+    split: dev
+    expect:
+      metric: inventory_value
+      breakdown: [category]
+      premises:
+        - {metric: inventory_value, expectation: up}
+    note: "'This year' for a snapshot metric means the latest 2026 month-end against a year earlier or year start; not asserted."
+
+  - id: inv-19
+    story: inventory_buildup_2026
+    speaker: cfo
+    register: casual
+    question: "How much inventory did we add year over year, and how much of that is stuff that isn't selling?"
+    split: dev
+    expect:
+      metric: inventory_value
+      comparison: yoy
+    note: "The second half is a days-of-supply follow-up on the same snapshot."
+
+  # --------------------------------------------------------------------------
+  # General: plain lookups, breakdowns and trends
+  # --------------------------------------------------------------------------
+
+  - id: gen-01
+    story: general
+    speaker: ceo
+    register: casual
+    question: "What was revenue last quarter?"
+    split: dev
+    expect:
+      metric: revenue
+      window: 2026-Q2
+      comparison: none
+      intent: lookup
+
+  - id: gen-02
+    story: general
+    speaker: cfo
+    register: terse
+    question: "Revenue by region, Q2 2026."
+    split: holdout
+    expect:
+      metric: revenue
+      window: 2026-Q2
+      breakdown: [region]
+      intent: breakdown
+
+  - id: gen-03
+    story: general
+    speaker: analyst
+    register: terse
+    question: "Monthly revenue trend for 2026."
+    split: dev
+    expect:
+      metric: revenue
+      window: 2026
+      intent: trend
+
+  - id: gen-04
+    story: general
+    speaker: sales
+    register: casual
+    question: "Top customers by revenue this year."
+    split: dev
+    expect:
+      metric: revenue
+      window: 2026
+      breakdown: [customer]
+
+  - id: gen-05
+    story: general
+    speaker: ops
+    register: terse
+    question: "Return rate by category last quarter."
+    split: holdout
+    expect:
+      metric: return_rate
+      window: 2026-Q2
+      breakdown: [category]
+      intent: breakdown
+
+  - id: gen-06
+    story: general
+    speaker: cfo
+    register: terse
+    question: "Opex by branch for Q2 2026."
+    split: dev
+    expect:
+      metric: operating_expenses
+      window: 2026-Q2
+      breakdown: [branch]
+      intent: breakdown
+
+  - id: gen-07
+    story: general
+    speaker: ceo
+    register: casual
+    question: "How many active customers do we have?"
+    split: dev
+    expect:
+      metric: active_customers
+      intent: lookup
+    note: "No period named; the interpreter must default one and say so."
+
+  - id: gen-08
+    story: general
+    speaker: sales
+    register: terse
+    question: "AOV by sales channel in August."
+    split: holdout
+    expect:
+      metric: aov
+      window: 2026-08
+      breakdown: [channel]
+      intent: breakdown
+
+  - id: gen-09
+    story: general
+    speaker: analyst
+    register: formal
+    question: "Units sold by product tier, Q2 2026 vs Q2 2025."
+    split: dev
+    expect:
+      metric: units
+      comparison: yoy
+      window: 2026-Q2
+      baseline: 2025-Q2
+      breakdown: [product_tier]
+
+  - id: gen-10
+    story: general
+    speaker: ops
+    register: casual
+    question: "Fuel surcharge by month this year."
+    split: dev
+    expect:
+      metric: fuel_surcharge
+      window: 2026
+      intent: trend
+
+  - id: gen-11
+    story: general
+    speaker: sales
+    register: casual
+    question: "Revenue for Oklahoma this quarter vs last quarter."
+    split: holdout
+    expect:
+      metric: revenue
+      comparison: pop
+      window: 2026-Q3
+      baseline: 2026-Q2
+      filters:
+        region: Oklahoma
+      intent: compare
+    note: "'This quarter' is Q3 2026, which ends on the reference date; a good answer flags that the quarter is not closed. Oklahoma is a region (and a state); the region is the reporting dimension."
+
+  - id: gen-12
+    story: general
+    speaker: analyst
+    register: terse
+    question: "Gross margin % by supplier, 2026."
+    split: dev
+    expect:
+      metric: gross_margin_pct
+      window: 2026
+      breakdown: [supplier]
+
+  - id: gen-13
+    story: general
+    speaker: ceo
+    register: casual
+    question: "How is Plano doing?"
+    split: dev
+    expect:
+      filters:
+        branch: Plano
+    note: "No metric, no period; a human asks or defaults to revenue and says so. Only the branch filter is asserted."
+
+  - id: gen-14
+    story: general
+    speaker: ops
+    register: terse
+    question: "Headcount by branch, June 2026."
+    split: holdout
+    expect:
+      metric: headcount
+      window: 2026-06
+      breakdown: [branch]
+      intent: breakdown
+
+  - id: gen-15
+    story: general
+    speaker: cfo
+    register: terse
+    question: "Revenue vs budget by branch, Q2 2026."
+    split: dev
+    expect:
+      metric: revenue
+      comparison: budget
+      window: 2026-Q2
+      breakdown: [branch]
+    note: "'Budget' at branch grain is budget_revenue; for FY26 it equals the plan allocation, so the yardstick metric is not asserted."
+
+  - id: gen-16
+    story: general
+    speaker: sales
+    register: casual
+    question: "Are reps hitting quota this month?"
+    split: dev
+    expect:
+      metric: revenue
+      comparison: budget
+      baseline_metric: revenue_target
+      window: 2026-09
+      breakdown: [sales_rep]
+    note: "'Quota' is a synonym of the rep revenue target. September is the current, unclosed month."
+
+  - id: gen-17
+    story: general
+    speaker: ceo
+    register: casual
+    question: "What's our best-selling category?"
+    split: holdout
+    expect:
+      metric_any_of: [revenue, units]
+      breakdown: [category]
+    note: "'Best-selling' can be by revenue or by units; a human picks revenue and says so, or asks. No period named."
+
+  - id: gen-18
+    story: general
+    speaker: ops
+    register: terse
+    question: "Returns by reason last quarter."
+    split: dev
+    expect:
+      metric: returns_amount
+      window: 2026-Q2
+      breakdown: [return_reason]
+    note: "'Returns' as a metric is returned revenue (returns_amount). A count of returns is not governed."
+
+  - id: gen-19
+    story: general
+    speaker: sales
+    register: terse
+    question: "Sales by rep for August."
+    split: dev
+    expect:
+      metric: revenue
+      window: 2026-08
+      breakdown: [sales_rep]
+      intent: breakdown
+
+  - id: gen-20
+    story: general
+    speaker: cfo
+    register: casual
+    question: "Commission as a share of revenue by region, Q2."
+    split: holdout
+    expect:
+      metric: sales_commission
+      window: 2026-Q2
+      breakdown: [region]
+    note: "Semantic-model gap: there is no commission rate metric. The honest answer shows commission and revenue side by side, or says the ratio is not governed."
+
+  - id: gen-21
+    story: general
+    speaker: analyst
+    register: terse
+    question: "Orders by sales channel, Q2 2026."
+    split: dev
+    expect:
+      metric: orders
+      window: 2026-Q2
+      breakdown: [channel]
+      intent: breakdown
+
+  - id: gen-22
+    story: general
+    speaker: ceo
+    register: casual
+    question: "Compare Houston and Dallas on revenue last quarter."
+    split: dev
+    expect:
+      metric: revenue
+      comparison: segment
+      window: 2026-Q2
+    note: "A branch-versus-branch comparison over the same period. Which side is 'current' is a convention, so it is not asserted."
+
+  - id: gen-23
+    story: general
+    speaker: cfo
+    register: terse
+    question: "Year-to-date operating profit vs plan."
+    split: holdout
+    expect:
+      metric: operating_profit
+      comparison: budget
+      window: 2026
+
+  - id: gen-24
+    story: general
+    speaker: sales
+    register: formal
+    question: "Quota attainment by rep for Q2 2026."
+    split: dev
+    expect:
+      metric: revenue
+      comparison: budget
+      baseline_metric: revenue_target
+      window: 2026-Q2
+      breakdown: [sales_rep]
+
+  - id: gen-25
+    story: general
+    speaker: ops
+    register: casual
+    question: "Which branch has the highest freight cost per delivery?"
+    split: dev
+    expect:
+      metric_any_of: [freight_cost, deliveries]
+      breakdown: [branch]
+    note: "Semantic-model gap: freight per delivery is not a governed metric. Showing both by branch is honest; inventing the ratio is not. No period named."
+
+  - id: gen-26
+    story: general
+    speaker: analyst
+    register: formal
+    question: "Average selling price by category, August 2026 versus August 2025."
+    split: holdout
+    expect:
+      metric: asp
+      comparison: yoy
+      window: 2026-08
+      baseline: 2025-08
+      breakdown: [category]
+
+  - id: gen-27
+    story: general
+    speaker: cfo
+    register: casual
+    question: "What did we spend on overtime in September?"
+    split: dev
+    expect:
+      metric: overtime
+      window: 2026-09
+      intent: lookup
+
+  - id: gen-28
+    story: general
+    speaker: sales
+    register: casual
+    question: "Pipeline created in Q3 by segment"
+    split: dev
+    expect:
+      metric: pipeline_amount
+      window: 2026-Q3
+      breakdown: [segment]
+    note: "'Pipeline' is a governed synonym of pipeline amount, dated by opportunity creation."
+
+  # --------------------------------------------------------------------------
+  # Ambiguity: the right behaviour is to ask
+  # --------------------------------------------------------------------------
+
+  - id: amb-01
+    story: ambiguity
+    speaker: ceo
+    register: terse
+    question: "How's margin?"
+    split: dev
+    expect:
+      ambiguous_among: [gross_margin, gross_margin_pct, contribution_margin, operating_profit]
+
+  - id: amb-02
+    story: ambiguity
+    speaker: cfo
+    register: terse
+    question: "Margin by region last quarter."
+    split: holdout
+    expect:
+      ambiguous_among: [gross_margin, gross_margin_pct, contribution_margin, operating_profit]
+      window: 2026-Q2
+      breakdown: [region]
+
+  - id: amb-03
+    story: ambiguity
+    speaker: ceo
+    register: terse
+    question: "Profit last quarter?"
+    split: dev
+    expect:
+      ambiguous_among: [gross_margin, operating_profit]
+      window: 2026-Q2
+    note: "Gross profit and operating profit are both governed; contribution margin is a third defensible candidate."
+
+  - id: amb-04
+    story: ambiguity
+    speaker: sales
+    register: casual
+    question: "What's our profitability on Contractor?"
+    split: dev
+    expect:
+      ambiguous_among: [gross_margin, gross_margin_pct, contribution_margin, operating_profit]
+      filters:
+        segment: Contractor
+    note: "'Profitability' is a glossary synonym of the ambiguous term Margin."
+
+  - id: amb-05
+    story: ambiguity
+    speaker: ops
+    register: terse
+    question: "Costs are up. Why?"
+    split: holdout
+    expect:
+      ambiguous_among: [cogs, operating_expenses]
+    note: "'Costs' could be cost of goods, operating expenses or a single line such as freight; a human asks. The candidate list is the minimum."
+
+  - id: amb-06
+    story: ambiguity
+    speaker: ceo
+    register: idiomatic
+    question: "Are we making money in West Texas?"
+    split: dev
+    expect:
+      ambiguous_among: [gross_margin, contribution_margin, operating_profit]
+      filters:
+        region: West Texas
+    note: "'Making money' is a profit line without saying which."
+
+  - id: amb-07
+    story: ambiguity
+    speaker: cfo
+    register: terse
+    question: "Volume vs last year"
+    split: dev
+    expect:
+      ambiguous_among: [units, orders]
+      comparison: yoy
+    note: "'Volume' is a synonym of units, and 'order volume', 'lead volume' and 'delivery volume' are synonyms of other metrics; bare 'volume' needs asking."
+
+  - id: amb-08
+    story: ambiguity
+    speaker: analyst
+    register: terse
+    question: "Budget vs actual, Q2."
+    split: holdout
+    expect:
+      ambiguous_among: [revenue, gross_margin, operating_profit]
+      comparison: budget
+      window: 2026-Q2
+    note: "Budget versus actual of what? The branch budget carries revenue and gross margin; the plan carries operating profit. A human asks."
+
+  - id: amb-09
+    story: ambiguity
+    speaker: ceo
+    register: idiomatic
+    question: "Where are we losing money?"
+    split: dev
+    expect:
+      ambiguous_among: [gross_margin, contribution_margin, operating_profit]
+    note: "A profit line, unspecified, with an implied breakdown the analyst would settle after asking."
+
+  - id: amb-10
+    story: ambiguity
+    speaker: ceo
+    register: terse
+    question: "Margin in Dallas vs Houston"
+    split: dev
+    expect:
+      ambiguous_among: [gross_margin, gross_margin_pct, contribution_margin, operating_profit]
+      comparison: segment
+
+  - id: amb-11
+    story: ambiguity
+    speaker: sales
+    register: casual
+    question: "How did the January price increase land?"
+    split: holdout
+    expect:
+      ambiguous_among: [asp, gross_revenue, discount_rate]
+    note: "'Price' has no single governed metric: average selling price, list revenue and discount rate all describe it. A human asks what 'land' should be measured by."
+
+  - id: amb-12
+    story: ambiguity
+    speaker: cfo
+    register: casual
+    question: "Are we ahead of plan or behind?"
+    split: dev
+    expect:
+      ambiguous_among: [revenue, operating_profit]
+      comparison: budget
+    note: "Every plan metric is a candidate; the two a CFO most likely means are revenue and operating profit. Period unstated."
+
+  # --------------------------------------------------------------------------
+  # Unresolved: no governed metric exists; say so rather than substitute
+  # --------------------------------------------------------------------------
+
+  - id: unr-01
+    story: unresolved
+    speaker: ceo
+    register: casual
+    question: "What's our customer satisfaction score trend?"
+    split: dev
+    expect:
+      unresolved: true
+
+  - id: unr-02
+    story: unresolved
+    speaker: ceo
+    register: terse
+    question: "NPS by region last quarter"
+    split: holdout
+    expect:
+      unresolved: true
+    note: "Net promoter score is not in the data or the model."
+
+  - id: unr-03
+    story: unresolved
+    speaker: cfo
+    register: terse
+    question: "What's our cash position?"
+    split: dev
+    expect:
+      unresolved: true
+
+  - id: unr-04
+    story: unresolved
+    speaker: cfo
+    register: casual
+    question: "How fast are customers paying us? DSO by segment."
+    split: dev
+    expect:
+      unresolved: true
+    note: "Payment terms is a dimension, but there is no receivables or days-sales-outstanding metric."
+
+  - id: unr-05
+    story: unresolved
+    speaker: sales
+    register: casual
+    question: "What's our customer churn rate this year?"
+    split: holdout
+    expect:
+      unresolved: true
+    note: "Active customers is governed; churn (customers lost) is not, and should not be improvised from it without saying so."
+
+  - id: unr-06
+    story: unresolved
+    speaker: ops
+    register: terse
+    question: "On-time delivery rate by branch"
+    split: dev
+    expect:
+      unresolved: true
+    note: "Ship date exists as a dimension; there is no promised date or on-time metric."
+
+  - id: unr-07
+    story: unresolved
+    speaker: ops
+    register: casual
+    question: "How many stockouts did we have last month?"
+    split: dev
+    expect:
+      unresolved: true
+    note: "On-hand units is governed at month end; stockout events are not."
+
+  - id: unr-08
+    story: unresolved
+    speaker: ceo
+    register: casual
+    question: "What's our market share in Texas?"
+    split: holdout
+    expect:
+      unresolved: true
+
+  - id: unr-09
+    story: unresolved
+    speaker: cfo
+    register: terse
+    question: "EBITDA for Q2"
+    split: dev
+    expect:
+      unresolved: true
+      window: 2026-Q2
+    note: "Operating profit is tagged 'EBIT proxy' but depreciation is not in the data, so EBITDA is not governed. Offering operating profit as the nearest line while saying EBITDA is unavailable is acceptable; silently substituting is not."
+
+  - id: unr-10
+    story: unresolved
+    speaker: analyst
+    register: terse
+    question: "Cost per lead by channel, Q2 2026."
+    split: dev
+    expect:
+      unresolved: true
+      window: 2026-Q2
+    note: "Leads are governed; marketing spend is not in the dataset."
+
+  - id: unr-11
+    story: unresolved
+    speaker: ops
+    register: casual
+    question: "Employee turnover by branch this year"
+    split: holdout
+    expect:
+      unresolved: true
+    note: "Headcount (FTE) is a level; hires and leavers are not in the data."
+
+  - id: unr-12
+    story: unresolved
+    speaker: sales
+    register: casual
+    question: "Average deal size on won opportunities"
+    split: dev
+    expect:
+      unresolved: true
+    note: "Pipeline amount and opportunity stage exist, but no won-deal or average deal size metric is governed; an analyst could build one and should say it is not governed."
+
+  - id: unr-13
+    story: unresolved
+    speaker: cfo
+    register: formal
+    question: "Net income after tax for Q2 2026."
+    split: dev
+    expect:
+      unresolved: true
+      window: 2026-Q2
+    note: "The glossary maps 'net profit' to operating profit because tax is held at corporate; 'after tax' explicitly asks for what the data lacks, so the honest answer is that it is unavailable, with operating profit offered as the lowest governed line."
+
+  - id: unr-14
+    story: unresolved
+    speaker: ops
+    register: terse
+    question: "Fill rate by category last month"
+    split: holdout
+    expect:
+      unresolved: true
+
+  - id: unr-15
+    story: unresolved
+    speaker: ceo
+    register: casual
+    question: "How much web traffic did we get in August?"
+    split: dev
+    expect:
+      unresolved: true
+    note: "Web Form is a lead channel; site traffic is not in the data."

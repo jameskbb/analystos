@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Playwright acceptance flows 1 and 2 for AnalystOS (spec §96, §97) against a running API + web",
+  "description": "Playwright acceptance flows 1 and 2 (spec §96, §97) and the flagship CEO flow for AnalystOS against a running API + web",
   "scripts": {
     "test": "playwright test",
     "test:headed": "playwright test --headed",
