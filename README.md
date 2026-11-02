@@ -2,6 +2,15 @@
 
 ![AnalystOS title card: the product name beside the question "We made our sales number last quarter, but we missed our target for net profit. What happened?", with Revenue on plan (+0.4%) and a waterfall labelled "net profit, read as Operating Profit" from the $3.79M plan through unit-cost inflation, discounting, favorable mix, freight, labor and other lines to the $1.93M actual, the largest bars labelled with their cause (supplier Gulf States, Contractor discounts, fuel surcharge, overtime), and the Gulf Coast lead-conversion signal marked not established](docs/images/readme-title-analystos.png)
 
+<p align="center">
+  <a href="https://github.com/jameskbb/analystos/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/jameskbb/analystos/ci.yml?branch=main&style=for-the-badge&logo=githubactions&logoColor=white&label=CI"></a>
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/jameskbb/analystos?style=for-the-badge&label=License&color=blue"></a>
+  <a href="pyproject.toml"><img alt="Python" src="https://img.shields.io/badge/dynamic/toml?url=https%3A%2F%2Fraw.githubusercontent.com%2Fjameskbb%2Fanalystos%2Fmain%2Fpyproject.toml&query=%24.project%5B%27requires-python%27%5D&label=Python&style=for-the-badge&logo=python&logoColor=white&color=3776AB"></a>
+  <a href="apps/web/package.json"><img alt="Next.js" src="https://img.shields.io/github/package-json/dependency-version/jameskbb/analystos/next?filename=apps%2Fweb%2Fpackage.json&style=for-the-badge&logo=nextdotjs&logoColor=white&label=Next.js&color=000000"></a>
+  <a href="pyproject.toml"><img alt="DuckDB" src="https://img.shields.io/badge/DuckDB-query%20engine-FFD500?style=for-the-badge&logo=duckdb&logoColor=black"></a>
+  <a href="docs/mcp.md"><img alt="MCP" src="https://img.shields.io/badge/MCP-server-8A2BE2?style=for-the-badge&logo=modelcontextprotocol&logoColor=white"></a>
+</p>
+
 **An analytical investigation workspace for BI, data, operations and finance teams.**
 You connect your data, define what your metrics mean, and ask questions like *"We made our sales
 number last quarter, but we missed our target for net profit. What happened?"* AnalystOS turns the question into a reviewable
