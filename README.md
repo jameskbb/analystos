@@ -21,11 +21,8 @@ produced it.
 The idea in one line: **make the analyst's method executable.**
 
 It runs locally on your machine with a generated demo dataset, needs no cloud service, and works
-end to end with no AI API key; see [Quick start](#quick-start).
-
-> **Status:** experimental personal project, built largely with AI assistance and not
-> security-audited. Run it locally; see [SECURITY.md](SECURITY.md) before exposing it to a network
-> or pointing it at sensitive data.
+end to end with no AI API key; see [Quick start](#quick-start). It has not been security-audited,
+so read [SECURITY.md](SECURITY.md) before exposing it to a network or pointing it at sensitive data.
 
 ## The question
 

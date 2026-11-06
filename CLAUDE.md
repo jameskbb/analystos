@@ -6,11 +6,14 @@ Code and Codex follow identical rules. Change both together.
 [`README.md`](README.md) is the description of record for what this product
 is. There is exactly one answer to "what is AnalystOS", and it is the README's.
 
-[`.claude/CLAUDE.md`](.claude/CLAUDE.md) is **generated** from `.planning/` by
-GSD. It carries the GSD workflow rules and the planning constraints; its
-project blurb is a planning artefact and is not the product description. Never
-hand-edit it; change the planning source and let GSD regenerate. This file
-holds only the operating rules GSD does not generate.
+The core value every change protects: each analytical conclusion is traceable
+(conclusion, evidence, calculation, query, source data), reproducible from
+stored executable logic, and understandable by a human analyst. The analytical
+engine, not the LLM, sits between the data and the answer.
+
+These two files are the only agent rules. GSD planning state (`.planning/`) is
+local and untracked; if a GSD tool writes a `.claude/CLAUDE.md`, do not commit
+it.
 
 ## 1. Repository
 
@@ -65,6 +68,9 @@ the demo run with no network, no Docker and no API key. A change that breaks
   name and never execute supplied SQL. Calling them is confined to ingest (file
   upload and connector pull), the demo load and dataset lifecycle. Do not add a
   query path that skips `ensure_read_only`, and do not add another writer.
+- **Reproducible investigations.** The deterministic, semantic-model-driven
+  planner is the core and the LLM is an optional enhancement: the same data and
+  definitions must yield the same investigation tree.
 - **Governed semantic model.** Do not add an unapproved relationship, an
   unguarded join, or a metric without a version. The compiler is grain-safe;
   do not suppress its warnings or refusals to make a query run.

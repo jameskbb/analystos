@@ -48,3 +48,4 @@ kubeconfig*
 
 # Planning and agent working files (kept locally, not published)
 .planning/
+.claude/CLAUDE.md
