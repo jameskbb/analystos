@@ -1,3 +1,6 @@
 allowBuilds:
   esbuild: true
   unrs-resolver: true
+overrides:
+  # next 15 pins postcss 8.4.31, which has open advisories; no next 15 release unpins it
+  next>postcss: ^8.5.28

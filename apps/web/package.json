@@ -45,7 +45,7 @@
     "cmdk": "^1.1.1",
     "echarts": "^6.1.0",
     "lucide-react": "^1.47.0",
-    "next": "^15.5.25",
+    "next": "^15.5.28",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "react-grid-layout": "^2.2.4",
@@ -72,7 +72,7 @@
     "postcss": "^8.5.28",
     "tailwindcss": "^4.3.3",
     "typescript": "^5.9.3",
-    "vite": "^8.3.0",
-    "vitest": "^4.1.11"
+    "vite": "^8.3.3",
+    "vitest": "^4.1.12"
   }
 }
